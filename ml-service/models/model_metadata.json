@@ -1,0 +1,105 @@
+{
+  "novel_pattern_experiment": {
+    "unseen_fraud_count": 820,
+    "rf_blind_caught": 787,
+    "iso_caught": 391,
+    "either_caught": 819,
+    "rescued_by_isolation_forest": 32
+  },
+  "trained_at": "2026-08-11T14:53:07",
+  "random_state": 42,
+  "feature_columns": [
+    "amount",
+    "oldbalanceOrg",
+    "newbalanceOrig",
+    "oldbalanceDest",
+    "newbalanceDest",
+    "errorBalanceOrig",
+    "errorBalanceDest",
+    "absErrorBalanceOrig",
+    "absErrorBalanceDest",
+    "orig_account_emptied",
+    "dest_was_empty",
+    "amount_to_balance_ratio",
+    "type_CASH_IN",
+    "type_CASH_OUT",
+    "type_DEBIT",
+    "type_PAYMENT",
+    "type_TRANSFER",
+    "is_risky_type",
+    "hour_of_day",
+    "is_night",
+    "dest_txn_count",
+    "dest_mean_amount",
+    "dest_std_amount",
+    "dest_has_thin_history",
+    "dest_amount_deviation",
+    "dest_amount_ratio",
+    "dest_velocity_count",
+    "is_new_receiver"
+  ],
+  "anomaly_calibration": {
+    "p_low": -0.21671815275448297,
+    "p_high": 0.06308180391781507
+  },
+  "hybrid_weights": {
+    "random_forest_weight": 0.7,
+    "isolation_forest_weight": 0.3
+  },
+  "decision_thresholds": {
+    "approve_below": 0.35,
+    "block_above": 0.75,
+    "otp_timeout_seconds": 60
+  },
+  "training_rows": 160000,
+  "test_rows": 40000,
+  "metrics": {
+    "Random Forest alone": {
+      "accuracy": 0.99975,
+      "precision": 0.9975624619134674,
+      "recall": 0.9963481436396835,
+      "f1": 0.9969549330085262,
+      "roc_auc": 0.9993010454637249,
+      "pr_auc": 0.9983412294891255
+    },
+    "Isolation Forest alone": {
+      "accuracy": 0.95165,
+      "precision": 0.39673527324343505,
+      "recall": 0.3402312842361534,
+      "f1": 0.36631716906946266,
+      "roc_auc": 0.8953745501209598,
+      "pr_auc": 0.3204911174609823
+    },
+    "HYBRID (both combined)": {
+      "accuracy": 0.999725,
+      "precision": 0.9975609756097561,
+      "recall": 0.995739500912964,
+      "f1": 0.9966494060310691,
+      "roc_auc": 0.998933776380343,
+      "pr_auc": 0.9977305632791755
+    }
+  },
+  "confusion_matrix_hybrid": {
+    "tn": 38353,
+    "fp": 4,
+    "fn": 7,
+    "tp": 1636
+  },
+  "routing_summary": {
+    "APPROVE": {
+      "count": 37508,
+      "fraud": 6,
+      "pct": 93.77
+    },
+    "OTP_CONFIRM": {
+      "count": 856,
+      "fraud": 2,
+      "pct": 2.14
+    },
+    "BLOCK": {
+      "count": 1636,
+      "fraud": 1635,
+      "pct": 4.09
+    }
+  }
+}

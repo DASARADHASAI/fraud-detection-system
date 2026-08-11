@@ -100,9 +100,13 @@ model:
   hybrid:
     random_forest_weight: 0.7     # Supervised model is trusted more...
     isolation_forest_weight: 0.3  # ...but the anomaly detector still gets a vote
-    # If the two models strongly disagree, we raise a "models_disagree" flag
-    # and force the transaction into the step-up (OTP) path.
-    disagreement_threshold: 0.4
+    # NOTE: there is deliberately no "disagreement_threshold" here any more.
+    # Each model is asked for its verdict using ITS OWN proper boundary:
+    #   Random Forest   -> probability >= 0.5
+    #   Isolation Forest-> its contamination-based cut (decision_function < 0)
+    # An earlier version compared the two scores on a shared 0-1 scale, but the
+    # anomaly score is a rescaled range, not a probability -- a 0.5 cut on it
+    # flagged 13.6% of ordinary traffic and swamped the OTP queue.
 
 # ----------------------------------------------------------------------------
 # Decision thresholds -- these drive the FULLY AUTOMATIC routing (Phase 6).

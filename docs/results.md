@@ -1,0 +1,78 @@
+# Phase 2 Results — Hybrid Model Evaluation
+
+*Generated automatically by `train_model.py` on 2026-08-11T14:53:07. Do not edit by hand — re-run the script.*
+
+## Method
+
+- **Dataset:** PaySim, sampled to 200,000 rows (all fraud rows kept)
+- **Split:** 80% train / 20% test, stratified, `random_state=42`
+- **Order of operations:** split → scale (fit on train only) → SMOTE (train only)
+- **Isolation Forest** trained on legitimate training rows only, *before* SMOTE
+- **Random Forest** trained on the SMOTE-balanced training set
+- **Hybrid score** = 0.7 × RF probability + 0.3 × normalised anomaly score
+
+## Metrics on the untouched test set
+
+| model                  |   accuracy |   precision |   recall |     f1 |   roc_auc |   pr_auc |
+|:-----------------------|-----------:|------------:|---------:|-------:|----------:|---------:|
+| Random Forest alone    |     0.9998 |      0.9976 |   0.9963 | 0.9970 |    0.9993 |   0.9983 |
+| Isolation Forest alone |     0.9516 |      0.3967 |   0.3402 | 0.3663 |    0.8954 |   0.3205 |
+| HYBRID (both combined) |     0.9997 |      0.9976 |   0.9957 | 0.9966 |    0.9989 |   0.9977 |
+
+Test set contains 1,643 fraud out of 40,000 transactions (4.107%).
+
+> **Accuracy is the wrong headline here.** Predicting "never fraud" would score 95.9% accuracy while catching nothing. Read precision, recall and PR-AUC instead.
+
+## Confusion matrix — hybrid model
+
+| | predicted legitimate | predicted fraud |
+|---|---|---|
+| **actually legitimate** | 38,353 | 4 |
+| **actually fraud** | 7 | 1,636 |
+
+- **7 frauds missed** (false negatives) — the costly mistake
+- **4 legitimate payments flagged** (false positives) — customer friction, softened by the OTP step-up rather than an outright block
+
+## Automatic routing outcome
+
+| Decision | Transactions | Share | Actual fraud inside |
+|---|---|---|---|
+| APPROVE | 37,508 | 93.77% | 6 |
+| OTP_CONFIRM | 856 | 2.14% | 2 |
+| BLOCK | 1,636 | 4.09% | 1,635 |
+
+## Does the hybrid catch fraud it was never taught?
+
+A normal train/test split cannot answer this: the test set contains the same *kinds* of fraud as the training set, so nothing in it is genuinely novel. To test the claim honestly we hid **every TRANSFER fraud** from the Random Forest during training, leaving it able to recognise CASH_OUT fraud only — then showed both models the TRANSFER frauds from the sealed test set.
+
+| Model | Caught (of 820 unseen frauds) | Rate |
+|---|---|---|
+| Random Forest (blinded) | 787 | 96.0% |
+| Isolation Forest | 391 | 47.7% |
+| **Either model** | **819** | **99.9%** |
+
+The unsupervised model **rescued 32 frauds** the supervised model missed entirely. This is the evidence for test case R5, and the concrete justification for the hybrid architecture.
+
+**The trade-off, stated plainly:** on *known* fraud types the Isolation Forest contributes only false alarms — it flagged 849 transactions the Random Forest considered safe, and none of them were fraud. Those become OTP challenges for legitimate customers (2.1% of traffic). That cost buys insurance against fraud patterns nobody has labelled yet. Whether the trade is worth it is a business decision, and the thresholds in `config.yaml` are where you tune it.
+
+## Top 10 features by importance
+
+| Rank | Feature | Importance |
+|---|---|---|
+| 1 | `errorBalanceOrig` | 0.2105 |
+| 2 | `absErrorBalanceOrig` | 0.1771 |
+| 3 | `amount_to_balance_ratio` | 0.1543 |
+| 4 | `orig_account_emptied` | 0.1411 |
+| 5 | `is_risky_type` | 0.0640 |
+| 6 | `newbalanceOrig` | 0.0635 |
+| 7 | `oldbalanceOrg` | 0.0432 |
+| 8 | `amount` | 0.0283 |
+| 9 | `dest_amount_ratio` | 0.0259 |
+| 10 | `type_PAYMENT` | 0.0191 |
+
+## Honest caveats
+
+- **PaySim is simulated data.** Its balance columns follow mechanical rules, so every model scores far higher here than it would on real bank transactions. These numbers show the pipeline is correct; they are not a claim about real-world accuracy.
+- **Sender-side behavioural features are excluded** because 99.85% of PaySim senders appear exactly once. See the README for the measurements.
+- **Location is simulated** and excluded from the model; impossible travel is applied as a live rule in Phase 7.
+- **The hybrid scores about the same as the Random Forest alone** on F1. Its distinct contribution is the `models_disagree` signal, which routes uncertain cases to OTP confirmation instead of forcing a silent approve/block.
