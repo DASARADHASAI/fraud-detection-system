@@ -430,9 +430,25 @@ def add_account_profiles(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
       inert on this dataset no matter how we sample. RECEIVER history is real
       and rich, so that is where the model's behavioural features come from.
 
-      This is not a workaround, it is the better signal anyway: a "mule"
-      account collecting a burst of transfers from many victims is one of the
-      clearest fraud patterns there is.
+      >>> BUT DO NOT OVERSELL WHAT THE RECEIVER FEATURES DETECT. <<<
+      An earlier version of this comment claimed the receiver side was "the
+      better signal anyway, because a mule account collecting a burst of
+      transfers is one of the clearest fraud patterns there is". That is true
+      of real banking and FALSE of this dataset. Measured over the full file:
+
+          prior payments to this receiver     legitimate    fraud
+            within 1 hour                         0.189     0.036
+            within 24 hours                       1.132     0.338
+          receiver reused at any point            57.2%     37.0%
+
+      PaySim fraud targets fresh, QUIET receivers, so the model learned --
+      correctly, for this data -- that a busy receiver is LESS suspicious.
+      What the receiver features genuinely contribute is amount-based:
+      dest_amount_ratio separates 0.885 (legitimate) from 8.201 (fraud).
+
+      The mule-burst typology is handled in rules.py as an explicit rule
+      instead, because a signal that is absent from the data cannot be learned
+      from it.
 
       We still COMPUTE the sender-side profile, because in the live system
       (Phases 5-7) a real customer does have history and those numbers become

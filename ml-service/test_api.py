@@ -262,7 +262,75 @@ def test_http(cfg) -> None:
     blank = requests.post(f"{BASE_URL}/chat", json={"question": "  "}, timeout=30)
     check(blank.status_code == 400, "/chat rejects an empty question")
 
-    print("\n10. The impossible-travel rule overrides the model")
+    print("\n10a. R7: rapid transfers from one account are blocked by rule")
+    # The model CANNOT do this. Measured across all 6.3M PaySim rows, fraud
+    # receivers are LESS busy than legitimate ones, so the model learned that
+    # burst activity is reassuring. The typology is real in banking and absent
+    # from the simulator, so it lives in rules.py instead.
+    requests.post(f"{BASE_URL}/reset", timeout=10)
+    drain = {"step": 300, "type": "TRANSFER", "amount": 40000,
+             "nameOrig": "C-VICTIM", "oldbalanceOrg": 200000,
+             "newbalanceOrig": 160000, "oldbalanceDest": 5000,
+             "newbalanceDest": 45000}
+    outcomes = []
+    for i in range(5):
+        outcomes.append(requests.post(
+            f"{BASE_URL}/predict", json={**drain, "nameDest": f"C-D{i}"},
+            timeout=30).json())
+
+    check(outcomes[-1]["decision"] == "BLOCK",
+          "the 5th rapid transfer in an hour is blocked")
+    check(outcomes[-1]["rule_applied"] == "rapid_sender_transfers",
+          "the rapid-transfer rule is named in the response")
+    check(outcomes[-1]["model_decision"] == "APPROVE",
+          "and the MODEL had approved it",
+          "this is the whole point: the rule catches what the data cannot teach")
+    check(all(o["decision"] == "APPROVE" for o in outcomes[:4]),
+          "the first four transfers are not blocked",
+          "the rule must need a genuine burst, not fire immediately")
+
+    print("\n10b. A receiver collecting from many senders is escalated to OTP")
+    requests.post(f"{BASE_URL}/reset", timeout=10)
+    collected = []
+    for i in range(6):
+        collected.append(requests.post(
+            f"{BASE_URL}/predict",
+            json={**drain, "nameOrig": f"C-S{i}", "nameDest": "C-MULE"},
+            timeout=30).json())
+    check(collected[-1]["decision"] == "OTP_CONFIRM",
+          "the 6th payment into one account triggers a step-up")
+    check(collected[-1]["rule_applied"] == "rapid_receiver_collection",
+          "the mule rule is named in the response")
+    check(collected[-1]["decision"] != "BLOCK",
+          "it asks rather than blocks",
+          "the suspicious account is the RECEIVER; the sender did nothing wrong")
+
+    print("\n10c. Rules stay silent on ordinary traffic")
+    requests.post(f"{BASE_URL}/reset", timeout=10)
+    fired = 0
+    for i in range(40):
+        r = requests.post(f"{BASE_URL}/predict", json={
+            "step": 300 + i, "type": "PAYMENT", "amount": 1500 + i * 10,
+            "nameOrig": f"C-CUST{i}", "oldbalanceOrg": 60000,
+            "newbalanceOrig": 58500, "nameDest": f"M-SHOP{i % 5}",
+            "oldbalanceDest": 90000, "newbalanceDest": 91500}, timeout=30).json()
+        if r["rule_applied"]:
+            fired += 1
+    check(fired == 0, "40 ordinary payments trigger no rules",
+          f"{fired} false positives -- thresholds are too tight")
+
+    print("\n10d. Rules escalate only, never soften")
+    # A crude heuristic must not be able to release what a measured model
+    # blocked. Same principle as models_disagree in Phase 2.
+    requests.post(f"{BASE_URL}/reset", timeout=10)
+    blocked = requests.post(f"{BASE_URL}/predict", json={
+        "step": 300, "type": "TRANSFER", "amount": 3244067.13, "nameOrig": "C-F",
+        "oldbalanceOrg": 3244067.13, "newbalanceOrig": 0, "nameDest": "C-X",
+        "oldbalanceDest": 0, "newbalanceDest": 0}, timeout=30).json()
+    check(blocked["decision"] == "BLOCK",
+          "a model BLOCK survives the rule layer untouched")
+
+    print("\n11. The impossible-travel rule overrides the model")
     requests.post(f"{BASE_URL}/reset", timeout=10)
     base = {"type": "PAYMENT", "amount": 2000, "nameOrig": "C77",
             "oldbalanceOrg": 50000, "newbalanceOrig": 48000, "nameDest": "M1",

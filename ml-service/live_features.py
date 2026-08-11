@@ -188,6 +188,22 @@ class TransactionHistory:
             return self._last_location.get(account)
 
     # -------------------------------------------------------------------------
+    def count_within(self, account: str, step: int, window: int) -> int:
+        """
+        How many payments has this account already had in the last `window`
+        hours? Used by the rule layer (rules.py) for its burst checks.
+
+        Counts PRIOR transactions only -- the current one has not been recorded
+        yet, because scoring always happens before recording. So "more than 3"
+        means three earlier payments plus the one being judged.
+        """
+        with self._lock:
+            entries = self._history.get(account)
+            if not entries:
+                return 0
+            return sum(1 for s, _ in entries if s > step - window)
+
+    # -------------------------------------------------------------------------
     def record(self, txn: dict) -> None:
         """
         Store a transaction AFTER it has been scored.

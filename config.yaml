@@ -109,6 +109,59 @@ model:
     # flagged 13.6% of ordinary traffic and swamped the OTP queue.
 
 # ----------------------------------------------------------------------------
+# RULE LAYER -- hard constraints the model does not get to overrule.
+#
+# WHY THIS EXISTS AT ALL:
+# Some fraud patterns cannot be learned from PaySim because PaySim does not
+# contain them. We measured the whole 6.3M-row file:
+#
+#     prior payments to this receiver   legitimate    fraud
+#       within 1 hour                       0.189     0.036
+#       within 24 hours                     1.132     0.338
+#     receiver reused at any point          57.2%     37.0%
+#
+# Every window points the SAME way: PaySim fraud targets fresh, quiet receiver
+# accounts. The "mule account collecting a burst of transfers" typology -- real
+# and well documented in actual banking -- simply is not in this simulator, so
+# the model correctly learned that a busy receiver is LESS suspicious. Only
+# 0.58% of fraud rows had a receiver collecting 2+ payments within an hour.
+#
+# No amount of feature engineering recovers a signal that is absent and points
+# backwards. So these typologies are encoded as deterministic RULES instead, and
+# the report says so plainly rather than claiming the model detects them.
+#
+# Rules may only ESCALATE a decision (APPROVE -> OTP_CONFIRM -> BLOCK), never
+# soften one. A rule must not be able to wave through what the model blocked.
+#
+# Thresholds below are taken from measured percentiles, not guessed:
+#   sender   >3 payments in 1h -> fires on 0.000% of PaySim rows (max seen: 1)
+#   receiver >4 payments in 1h -> fires on 0.807%; the 99th percentile is 4,
+#                                 and merchant accounts never exceed 1
+# ----------------------------------------------------------------------------
+rules:
+  impossible_travel:
+    enabled: true
+    action: "BLOCK"        # A physical contradiction, not a probability.
+
+  rapid_sender_transfers:
+    # An account being drained in a burst of transfers. This is Phase 8's R7.
+    enabled: true
+    window_steps: 1        # 1 step = 1 hour
+    max_allowed: 3         # more than this many PRIOR payments -> fire
+    action: "BLOCK"
+
+  rapid_receiver_collection:
+    # One account collecting payments from many senders: the mule pattern.
+    enabled: true
+    window_steps: 1
+    max_allowed: 4
+    # OTP rather than BLOCK on purpose. The suspicious behaviour belongs to the
+    # RECEIVER, but the payment we are holding belongs to a sender who has done
+    # nothing wrong. Ask them to confirm; do not punish them for where their
+    # money happens to be going.
+    action: "OTP_CONFIRM"
+
+# ----------------------------------------------------------------------------
 # Decision thresholds -- these drive the FULLY AUTOMATIC routing (Phase 6).
 # There is no human reviewer anywhere in this system.
 # ----------------------------------------------------------------------------

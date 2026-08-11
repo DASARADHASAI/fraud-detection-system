@@ -53,6 +53,7 @@ from flask_cors import CORS
 from explain import load_explainer
 from features import load_config
 from genai_agent import FraudGenAIAgent
+import rules
 from live_features import (
     LiveFeatureBuilder,
     TransactionHistory,
@@ -155,26 +156,26 @@ def score_one(txn: dict) -> dict:
 
     scores = score_transactions(MODELS["rf"], MODELS["iso"], MODELS["scaler"],
                                 row, CONFIG, MODELS["calibration"])
-    decision = str(route_decisions(scores, CONFIG)[0])
+    model_decision = str(route_decisions(scores, CONFIG)[0])
     explanation = EXPLAINER.explain(row)
 
-    # The impossible-travel RULE overrides the model. It is a physical
-    # contradiction, not a probability -- no score should be able to wave
-    # through a payment that could not have happened.
-    travel = signals["impossible_travel"]
-    rule_applied = None
-    if travel.get("impossible"):
-        decision = "BLOCK"
-        rule_applied = "impossible_travel"
+    # The RULE LAYER runs after the model and may only escalate its decision.
+    # It covers what the model cannot: physical contradictions, and typologies
+    # that are absent from PaySim entirely (see rules.py for the measurements).
+    verdict = rules.evaluate(clean, signals, HISTORY, CONFIG, model_decision)
 
-    HISTORY.record(clean)          # only AFTER scoring
+    HISTORY.record(clean)          # only AFTER scoring, never before
 
     return {
         "transaction": clean,
         "fraud_score": round(float(scores["fraud_score"][0]), 4),
         "models_disagree": bool(scores["models_disagree"][0]),
-        "decision": decision,
-        "rule_applied": rule_applied,
+        "decision": verdict["decision"],
+        # Kept separate so the dashboard and the audit log can show that the
+        # model said one thing and a rule overrode it.
+        "model_decision": verdict["model_decision"],
+        "rule_applied": verdict["rule_applied"],
+        "rules_triggered": verdict["rules_triggered"],
         "shap_reasons": explanation["reasons"],
         "protective_factors": explanation["protective_factors"],
         "explanation_obj": explanation,
@@ -185,7 +186,7 @@ def score_one(txn: dict) -> dict:
             "novel_pattern": bool(scores["novel_pattern_flag"][0]),
         },
         "signals": {
-            "impossible_travel": travel,
+            "impossible_travel": signals["impossible_travel"],
             "receiver_profile": signals["receiver_profile"],
             "sender_profile": signals["sender_profile"],
             "trusted_device": clean.get("trusted_device", False),
@@ -200,7 +201,9 @@ def public_view(result: dict, transaction_id: str, latency_ms: float) -> dict:
         "fraud_score": result["fraud_score"],
         "models_disagree": result["models_disagree"],
         "decision": result["decision"],
+        "model_decision": result["model_decision"],
         "rule_applied": result["rule_applied"],
+        "rules_triggered": result["rules_triggered"],
         "shap_reasons": result["shap_reasons"],
         "protective_factors": result["protective_factors"],
         "model_detail": result["model_detail"],
