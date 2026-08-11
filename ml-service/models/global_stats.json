@@ -1,0 +1,6 @@
+{
+  "global_mean_amount": 179861.90354913071,
+  "global_std_amount": 603858.2314629357,
+  "min_user_history": 3,
+  "velocity_window_steps": 24
+}

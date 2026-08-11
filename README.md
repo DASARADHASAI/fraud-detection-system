@@ -106,13 +106,63 @@ decision:
 
 ---
 
+## What we measured about PaySim (and why the features look the way they do)
+
+Before trusting any feature, we counted how often each account actually
+reappears across all 6,362,620 rows:
+
+| | senders (`nameOrig`) | receivers (`nameDest`) |
+|---|---|---|
+| appear exactly once | **99.85%** | 83.1% |
+| max appearances | **3** | **113** |
+| rows belonging to a repeat account | **0.29%** | **64.4%** |
+
+PaySim mints a fresh customer ID for almost every transaction, so **sender
+history effectively does not exist**. A per-sender profile and per-sender
+velocity are inert on this dataset no matter how you sample — the columns come
+out constant, and `amount_deviation` collapses into a rescaled copy of `amount`.
+
+So the model's behavioural features are built on the **receiver** side, where
+history is real. This is arguably the better signal anyway: a "mule" account
+whose incoming amounts suddenly jump is a classic fraud pattern. The separation
+is clear in the engineered data:
+
+| feature | legitimate | fraud |
+|---|---|---|
+| `dest_amount_ratio` | 0.885 | **8.201** |
+| `dest_amount_deviation` | 0.089 | **2.979** |
+| `is_new_receiver` | 0.427 | 0.630 |
+
+The sender-side profile is still computed — in the live system a real customer
+*does* have history — but it is kept out of the trained model. Feeding it in
+would be worse than useless: `user_amount_deviation` is a constant during
+training but varies at prediction time, so the model would be reading a feature
+whose meaning silently changed between training and serving.
+
+### Order of operations matters
+
+Account history is a relationship *between* rows, so `features.py` engineers it
+on the **full 6.3M rows and only then samples down**. Sampling first keeps ~3%
+of rows, which throws away the earlier transactions that gave each account its
+history — we measured that mistake making 99.5% of receivers look brand new,
+against a true figure of 56%.
+
+This is why Phase 1 takes ~50 seconds and peaks around 4.5 GB of RAM. If your
+Mac is short on memory, lower `data.sample_size` in `config.yaml` — the
+full-file pass still runs, only the output gets smaller.
+
 ## Honest notes for the report
 
 - **Location data is simulated.** PaySim has no geo column at all. We generate a
   plausible city per transaction so the impossible-travel feature can be
   demonstrated, and we exclude it from the trained model — inventing evidence
   and then reporting accuracy on it would be dishonest. Impossible travel runs
-  as a hard rule in the live layer instead (Phase 7).
+  as a hard rule in the live layer instead (Phase 7). Only 109 impossible-travel
+  cases exist in the whole file, because a jump needs a customer with two
+  transactions and PaySim has only 9,298 of those.
+- **Sender-side behavioural features are excluded from the model** — not by
+  preference but because they are provably inert on this dataset. See the table
+  above.
 - **`isFlaggedFraud` is dropped.** It is the dataset's own built-in naive rule.
   Training on it would be data leakage.
 - **SMOTE is applied only to the training split**, after the train/test split,

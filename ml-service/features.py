@@ -94,11 +94,11 @@ TRANSACTION_TYPES = ["CASH_IN", "CASH_OUT", "DEBIT", "PAYMENT", "TRANSFER"]
 
 def load_raw_data(cfg: dict) -> pd.DataFrame:
     """
-    Load the PaySim CSV, sanity-check it, and take a manageable random sample.
+    Load the FULL PaySim CSV and sanity-check it.
 
-    PaySim has ~6.3 million rows. Training on all of them on a laptop is slow,
-    so we sample. BUT we keep EVERY fraud row -- fraud is only ~0.13% of the
-    data, so throwing any away would cripple the model.
+    Note there is no sampling here. Sampling happens later, in sample_data(),
+    AFTER the account-history features have been built -- see the long comment
+    on sample_data() for why that order matters.
     """
     csv_path = resolve_path(cfg, cfg["paths"]["raw_data"])
 
@@ -131,27 +131,44 @@ def load_raw_data(cfg: dict) -> pd.DataFrame:
             print(f"Dropped leaky column: '{col}' (this is the dataset's own "
                   f"built-in rule, using it would be cheating)")
 
-    # --- Sample down, but keep every fraud row ---
-    sample_size = int(cfg["data"]["sample_size"])
-    if sample_size and len(df) > sample_size:
-        seed = int(cfg["project"]["random_state"])
-        fraud_rows = df[df["isFraud"] == 1]
-        legit_rows = df[df["isFraud"] == 0]
-
-        n_legit_needed = max(sample_size - len(fraud_rows), 0)
-        n_legit_needed = min(n_legit_needed, len(legit_rows))
-
-        legit_sample = legit_rows.sample(n=n_legit_needed, random_state=seed)
-        df = pd.concat([fraud_rows, legit_sample], ignore_index=True)
-
-        # Shuffle so fraud is not all bunched at the top.
-        df = df.sample(frac=1.0, random_state=seed).reset_index(drop=True)
-
-        print(f"Sampled down to {len(df):,} rows "
-              f"(kept ALL {len(fraud_rows):,} fraud rows + "
-              f"{len(legit_sample):,} random legitimate rows)")
-
     return df
+
+
+def sample_data(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """
+    Cut the data down to a size a laptop can train on quickly, keeping EVERY
+    fraud row (fraud is only 0.129% of PaySim -- throwing any away would
+    cripple the model).
+
+    >>> WHY THIS RUNS *AFTER* FEATURE ENGINEERING <<<
+    An account's history is a relationship BETWEEN rows. If you sample first,
+    you keep ~3% of the rows, so the earlier transactions that gave an account
+    its history are almost always among the 97% you threw away -- and every
+    account then looks brand new. We measured exactly that: sampling first made
+    99.5% of receivers look like first-timers, when the true figure in the full
+    file is 83%. So: engineer history on all 6.3M rows, THEN sample.
+    """
+    sample_size = int(cfg["data"]["sample_size"])
+    if not sample_size or len(df) <= sample_size:
+        return df.reset_index(drop=True)
+
+    seed = int(cfg["project"]["random_state"])
+    fraud_rows = df[df["isFraud"] == 1]
+    legit_rows = df[df["isFraud"] == 0]
+
+    n_legit_needed = max(sample_size - len(fraud_rows), 0)
+    n_legit_needed = min(n_legit_needed, len(legit_rows))
+
+    legit_sample = legit_rows.sample(n=n_legit_needed, random_state=seed)
+    sampled = pd.concat([fraud_rows, legit_sample], ignore_index=True)
+
+    # Shuffle so fraud is not all bunched at the top.
+    sampled = sampled.sample(frac=1.0, random_state=seed).reset_index(drop=True)
+
+    print(f"Sampled down to {len(sampled):,} rows "
+          f"(kept ALL {len(fraud_rows):,} fraud rows + "
+          f"{len(legit_sample):,} random legitimate rows)")
+    return sampled
 
 
 # =============================================================================
@@ -219,10 +236,26 @@ def add_simulated_location(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     random_idx = rng.integers(0, n_cities, size=len(df))
     city_idx = np.where(travels, random_idx, home_idx)
 
-    # --- Step 3: inject impossible jumps for a small fraction of users ---
+    # --- Step 3: inject impossible jumps ---
+    #
+    # An "impossible jump" only makes sense for a customer who has at least TWO
+    # transactions -- you need a previous location to travel FROM. As measured,
+    # 99.85% of PaySim senders appear exactly once, so only a handful of
+    # accounts in any sample are even eligible. We inject into all of them and
+    # report the true count rather than silently producing zero.
+    #
+    # The real demonstration of this feature is the Phase 7 dashboard, where a
+    # demo customer submits several transactions in a row and the
+    # impossible-travel rule fires live.
+    txns_per_user = df["nameOrig"].value_counts()
+    eligible = txns_per_user[txns_per_user >= 2].index.to_numpy()
+
     fraction = float(loc_cfg.get("impossible_jump_user_fraction", 0.02))
-    n_injected = int(len(users) * fraction)
-    injected_users = set(rng.choice(users, size=n_injected, replace=False)) if n_injected else set()
+    n_injected = max(int(len(eligible) * fraction), len(eligible)) if len(eligible) else 0
+    injected_users = (
+        set(rng.choice(eligible, size=min(n_injected, len(eligible)), replace=False))
+        if n_injected else set()
+    )
 
     df = df.assign(_city_idx=city_idx)
     is_injected_user = df["nameOrig"].isin(injected_users)
@@ -242,7 +275,10 @@ def add_simulated_location(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
             .tail(1)
             .index
         )
-        df.loc[target_rows, "_city_idx"] = farthest_from[home_idx[target_rows]]
+        # home_idx is positional, target_rows are index labels -- translate,
+        # rather than assuming the two happen to line up.
+        target_pos = df.index.get_indexer(target_rows)
+        df.loc[target_rows, "_city_idx"] = farthest_from[home_idx[target_pos]]
 
     df["location"] = city_names[df["_city_idx"].to_numpy()]
     df["location_lat"] = city_lat[df["_city_idx"].to_numpy()]
@@ -278,8 +314,15 @@ def add_simulated_location(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     df["impossible_travel"] = (df["implied_speed_kmph"] > max_speed).astype(int)
 
     n_impossible = int(df["impossible_travel"].sum())
-    print(f"Simulated location added. Impossible-travel cases created: "
-          f"{n_impossible:,} (SIMULATED -- PaySim has no real geo data)")
+    n_multi = len(eligible)
+    print(f"Simulated location added (SIMULATED -- PaySim has no real geo data).")
+    print(f"  Customers with 2+ transactions in this sample: {n_multi:,} "
+          f"({100 * n_multi / df['nameOrig'].nunique():.2f}% -- PaySim reuses "
+          f"customer IDs almost never)")
+    print(f"  Impossible-travel cases created: {n_impossible:,}")
+    if n_impossible == 0:
+        print("  (None possible: an impossible jump needs a previous location to "
+              "travel FROM. This rule is demonstrated live in Phase 7 instead.)")
 
     return df
 
@@ -350,84 +393,83 @@ def engineer_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     df["hour_of_day"] = df["step"] % 24
     df["is_night"] = df["hour_of_day"].isin([0, 1, 2, 3, 4, 5]).astype(int)
 
-    # -------------------------------------------------------------------------
-    # 3e. PER-USER PROFILE -- "is this normal FOR THIS PERSON?"
-    #
-    # 5,000 rupees is nothing for a business account and enormous for a student.
-    # So we compare each amount against that user's own past behaviour.
-    #
-    # CRITICAL: we use only the user's EARLIER transactions (an "expanding"
-    # window that excludes the current row). A real bank cannot see a customer's
-    # future payments, so neither can we. Doing otherwise is data leakage.
-    #
-    # PaySim's users mostly appear only a handful of times, so most rows will
-    # have little or no history -- those fall back to GLOBAL averages, exactly
-    # as a real system does for a brand-new customer.
-    # -------------------------------------------------------------------------
+    # Tidy up any stray infinities/NaNs before they reach the model.
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    df[numeric_cols] = df[numeric_cols].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    return df
+
+
+def add_account_profiles(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """
+    BEHAVIOURAL PROFILES -- "is this normal?"
+
+    The idea: 5,000 rupees is nothing for a business and enormous for a student,
+    so we compare each amount against that account's own past, and we count how
+    busy the account suddenly became ("velocity"). Fraudsters drain accounts in
+    bursts, so a spike in activity is a real signal.
+
+    >>> RUN THIS ON THE FULL DATASET, BEFORE SAMPLING. <<<
+    History is a relationship between rows; sampling first destroys it.
+
+    CRITICAL: we only ever look at EARLIER transactions (an "expanding" window
+    that excludes the current row). A real bank cannot see the future, so
+    neither can we. Doing otherwise is data leakage.
+
+      >>> MEASURED REALITY OF PAYSIM -- IMPORTANT FOR THE REPORT <<<
+      We counted how often each account actually reappears in the full
+      6,362,620-row file:
+
+                             senders (nameOrig)   receivers (nameDest)
+        appear exactly once        99.85%               83.1%
+        max appearances              3                   113
+        rows on a repeat account    0.29%                64.4%
+
+      PaySim generates a fresh customer ID for nearly every transaction, so
+      SENDER history barely exists -- sender profile and sender velocity are
+      inert on this dataset no matter how we sample. RECEIVER history is real
+      and rich, so that is where the model's behavioural features come from.
+
+      This is not a workaround, it is the better signal anyway: a "mule"
+      account collecting a burst of transfers from many victims is one of the
+      clearest fraud patterns there is.
+
+      We still COMPUTE the sender-side profile, because in the live system
+      (Phases 5-7) a real customer does have history and those numbers become
+      meaningful for the explanation text and the OTP step-up rules. They are
+      simply kept out of the trained model -- see MODEL_FEATURES below.
+    """
+    print("\nBuilding account history profiles on the FULL dataset...")
     min_history = int(cfg["data"].get("min_user_history", 3))
+    window = int(cfg["data"]["velocity_window_steps"])
 
-    ordered = df.sort_values(["nameOrig", "step"], kind="mergesort")
-    amt = ordered["amount"]
-    grp = ordered.groupby("nameOrig", sort=False)
-
-    prior_count = grp.cumcount()                       # transactions BEFORE this one
-    prior_sum = grp["amount"].cumsum() - amt           # their total
-    prior_sq_sum = grp["amount"].transform(lambda s: (s ** 2).cumsum()) - amt ** 2
-
-    safe_count = prior_count.replace(0, np.nan)
-    prior_mean = prior_sum / safe_count
-    prior_var = (prior_sq_sum / safe_count) - prior_mean ** 2
-    prior_std = np.sqrt(prior_var.clip(lower=0.0))
-
-    df["user_txn_count"] = prior_count
-    df["user_mean_amount"] = prior_mean
-    df["user_std_amount"] = prior_std
-
-    # Global fallback values, saved to disk so the live API uses the SAME numbers.
+    # Global fallback values, saved to disk so the live API scores a brand-new
+    # account exactly the way training did.
     global_mean = float(df["amount"].mean())
     global_std = float(df["amount"].std())
 
-    thin_history = df["user_txn_count"] < min_history
-    df["has_thin_history"] = thin_history.astype(int)
-    df["user_mean_amount"] = df["user_mean_amount"].fillna(global_mean)
-    df["user_std_amount"] = df["user_std_amount"].fillna(global_std)
-    df.loc[thin_history, "user_mean_amount"] = global_mean
-    df.loc[thin_history, "user_std_amount"] = global_std
+    # Sender side: computed for the live layer, NOT fed to the model on PaySim.
+    df = _add_account_profile(
+        df, key="nameOrig", prefix="user",
+        min_history=min_history, window=window,
+        global_mean=global_mean, global_std=global_std,
+    )
 
-    # Guard against a zero standard deviation (a user who always sends exactly
-    # the same amount) -- that would make the division below blow up.
-    safe_std = df["user_std_amount"].replace(0, np.nan).fillna(global_std)
-    safe_std = safe_std.where(safe_std > 1.0, global_std)
+    # Receiver side: this is what the model actually learns from.
+    df = _add_account_profile(
+        df, key="nameDest", prefix="dest",
+        min_history=min_history, window=window,
+        global_mean=global_mean, global_std=global_std,
+    )
 
-    # "How many standard deviations above this user's normal is this payment?"
-    df["amount_deviation"] = (df["amount"] - df["user_mean_amount"]) / safe_std
-    df["amount_deviation"] = df["amount_deviation"].clip(-20, 20)
+    df["is_new_receiver"] = (df["dest_txn_count"] == 0).astype(int)
 
-    # "How many times bigger than this user's usual payment is this one?"
-    df["amount_vs_user_mean_ratio"] = (
-        df["amount"] / df["user_mean_amount"].clip(lower=1.0)
-    ).clip(upper=100.0)
-
-    print(f"  Per-user profile built (users with fewer than {min_history} past "
-          f"transactions fall back to global averages: "
-          f"{int(thin_history.sum()):,} rows, "
-          f"{100 * thin_history.mean():.1f}%)")
-
-    # -------------------------------------------------------------------------
-    # 3f. VELOCITY -- "how busy has this account suddenly become?"
-    #
-    # Fraudsters drain an account in a burst of rapid transfers. We count how
-    # many transactions this user made in the previous N steps (hours).
-    # -------------------------------------------------------------------------
-    window = int(cfg["data"]["velocity_window_steps"])
-    df["velocity_count"] = _count_recent_transactions(ordered, window)
-
-    # -------------------------------------------------------------------------
-    # 3g. RECEIVER HISTORY -- "have we ever seen this receiver before?"
-    # -------------------------------------------------------------------------
-    dest_ordered = df.sort_values(["nameDest", "step"], kind="mergesort")
-    df["dest_seen_count"] = dest_ordered.groupby("nameDest", sort=False).cumcount()
-    df["is_new_receiver"] = (df["dest_seen_count"] == 0).astype(int)
+    for prefix, label in [("user", "Sender"), ("dest", "Receiver")]:
+        thin = df[f"{prefix}_has_thin_history"]
+        active = df[f"{prefix}_velocity_count"] > 0
+        print(f"  {label} profile: {100 * thin.mean():5.1f}% of rows have thin "
+              f"history (fall back to global averages), "
+              f"{100 * active.mean():5.1f}% show recent activity")
 
     # Tidy up any stray infinities/NaNs before they reach the model.
     numeric_cols = df.select_dtypes(include=[np.number]).columns
@@ -453,28 +495,148 @@ def engineer_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     return df
 
 
-def _count_recent_transactions(ordered: pd.DataFrame, window: int) -> pd.Series:
+def _group_codes(sorted_keys: np.ndarray) -> np.ndarray:
     """
-    For each row: how many EARLIER transactions did this same user make within
-    the last `window` steps (hours)?
+    Turn an already-sorted column of account IDs into compact integer codes:
+    ["C1","C1","C7","C9","C9"] -> [0, 0, 1, 2, 2]
 
-    `ordered` must already be sorted by (nameOrig, step).
-    Because each user's steps are sorted, we can use a binary search
-    (np.searchsorted) instead of comparing every row to every other row.
+    Grouping on small integers is far faster than grouping on 6.3 million
+    strings, which matters because we now run this over the whole file.
     """
-    counts = np.zeros(len(ordered), dtype=np.int32)
-    position = 0
+    n = len(sorted_keys)
+    if n == 0:
+        return np.zeros(0, dtype=np.int64)
+    is_new_account = np.empty(n, dtype=bool)
+    is_new_account[0] = True
+    is_new_account[1:] = sorted_keys[1:] != sorted_keys[:-1]
+    return np.cumsum(is_new_account) - 1
 
-    for _, group in ordered.groupby("nameOrig", sort=False):
-        steps = group["step"].to_numpy()
-        n = len(steps)
-        # Index of the first earlier transaction still inside the time window.
-        first_in_window = np.searchsorted(steps, steps - window, side="left")
-        # Everything from there up to (but not including) this row.
-        counts[position:position + n] = np.arange(n) - first_in_window
-        position += n
 
-    return pd.Series(counts, index=ordered.index)
+def _add_account_profile(
+    df: pd.DataFrame,
+    key: str,
+    prefix: str,
+    min_history: int,
+    window: int,
+    global_mean: float,
+    global_std: float,
+) -> pd.DataFrame:
+    """
+    Build a behavioural profile for one side of the transaction.
+
+    `key` is the column identifying the account ("nameOrig" for the sender,
+    "nameDest" for the receiver). `prefix` names the output columns
+    ("user_..." or "dest_...").
+
+    Produces, for every row:
+      {prefix}_txn_count        how many times we saw this account BEFORE now
+      {prefix}_mean_amount      its average past amount (global avg if too new)
+      {prefix}_std_amount       how much its amounts normally vary
+      {prefix}_has_thin_history 1 if we do not have enough history to trust it
+      {prefix}_amount_deviation how many standard deviations above normal this is
+      {prefix}_amount_ratio     how many times its usual amount this is
+      {prefix}_velocity_count   how many transactions in the last `window` hours
+
+    Everything is computed on PRIOR rows only -- the current row is excluded --
+    so no information from the future ever reaches the model.
+
+    MUST be run on the FULL dataset, before any sampling. If you sample first,
+    the other half of an account's history usually gets thrown away and every
+    account looks brand new.
+    """
+    # Sort by account, then time, so "previous" means the right thing.
+    # mergesort is stable, which keeps ties in their original order.
+    ordered = df.sort_values([key, "step"], kind="mergesort")
+    codes = _group_codes(ordered[key].to_numpy())
+    amt = ordered["amount"].to_numpy(dtype=np.float64)
+    steps = ordered["step"].to_numpy(dtype=np.int64)
+
+    grouper = pd.Series(codes, index=ordered.index)
+    amt_series = pd.Series(amt, index=ordered.index)
+    sq_series = pd.Series(amt ** 2, index=ordered.index)
+
+    # --- Running count / sum / sum-of-squares of everything BEFORE this row ---
+    # (cumsum includes the current row, so we subtract it back off.)
+    prior_count = amt_series.groupby(grouper, sort=False).cumcount().to_numpy()
+    prior_sum = amt_series.groupby(grouper, sort=False).cumsum().to_numpy() - amt
+    prior_sq_sum = sq_series.groupby(grouper, sort=False).cumsum().to_numpy() - amt ** 2
+
+    # Standard deviation from running totals:  std = sqrt(E[x^2] - E[x]^2)
+    divisor = np.maximum(prior_count, 1)
+    prior_mean = np.where(prior_count > 0, prior_sum / divisor, np.nan)
+    prior_var = np.where(prior_count > 0, prior_sq_sum / divisor - prior_mean ** 2, np.nan)
+    prior_std = np.sqrt(np.clip(prior_var, 0.0, None))
+
+    # Assigning Series back to df -- pandas aligns them by index, so the
+    # original row order is preserved even though `ordered` was sorted.
+    df[f"{prefix}_txn_count"] = pd.Series(prior_count, index=ordered.index)
+    df[f"{prefix}_mean_amount"] = pd.Series(prior_mean, index=ordered.index)
+    df[f"{prefix}_std_amount"] = pd.Series(prior_std, index=ordered.index)
+
+    # --- Fall back to global averages when history is too thin to trust ---
+    thin = df[f"{prefix}_txn_count"] < min_history
+    df[f"{prefix}_has_thin_history"] = thin.astype(int)
+    df[f"{prefix}_mean_amount"] = df[f"{prefix}_mean_amount"].fillna(global_mean)
+    df[f"{prefix}_std_amount"] = df[f"{prefix}_std_amount"].fillna(global_std)
+    df.loc[thin, f"{prefix}_mean_amount"] = global_mean
+    df.loc[thin, f"{prefix}_std_amount"] = global_std
+
+    # Guard against a zero standard deviation (an account that always moves
+    # exactly the same amount) -- that would make the division below blow up.
+    safe_std = df[f"{prefix}_std_amount"].where(
+        df[f"{prefix}_std_amount"] > 1.0, global_std
+    )
+
+    df[f"{prefix}_amount_deviation"] = (
+        (df["amount"] - df[f"{prefix}_mean_amount"]) / safe_std
+    ).clip(-20, 20)
+
+    df[f"{prefix}_amount_ratio"] = (
+        df["amount"] / df[f"{prefix}_mean_amount"].clip(lower=1.0)
+    ).clip(upper=100.0)
+
+    # --- Velocity: prior transactions within the last `window` steps (hours) ---
+    df[f"{prefix}_velocity_count"] = pd.Series(
+        _count_recent(codes, steps, window), index=ordered.index
+    )
+
+    return df
+
+
+def _count_recent(codes: np.ndarray, steps: np.ndarray, window: int) -> np.ndarray:
+    """
+    For each row: how many EARLIER transactions did this same account have
+    within the last `window` steps (hours)?
+
+    `codes` and `steps` must already be sorted by (account, step).
+
+    THE TRICK: we want a binary search per account, but looping over 6.3 million
+    accounts in Python would take minutes. Instead we place every account on its
+    own stretch of one long number line:
+
+        position = account_code * span + step        (span > any possible step)
+
+    Because each account occupies a disjoint stretch, a single vectorised
+    binary search over the whole array can never wander into a neighbouring
+    account -- so we get the answer for all rows in one shot.
+    """
+    n = len(codes)
+    if n == 0:
+        return np.zeros(0, dtype=np.int32)
+
+    span = int(steps.max()) + int(window) + 2
+    line = codes * span + steps                 # every row's spot on the line
+    earliest_allowed = codes * span + (steps - window)
+
+    first_in_window = np.searchsorted(line, earliest_allowed, side="left")
+
+    # A negative (step - window) could push the search back into the previous
+    # account's stretch, so clamp it to where this account's own block starts.
+    account_start = np.searchsorted(codes, codes, side="left")
+    first_in_window = np.maximum(first_in_window, account_start)
+
+    # Everything from there up to (but not including) this row.
+    return (np.arange(n) - first_in_window).astype(np.int32)
 
 
 # =============================================================================
@@ -510,17 +672,24 @@ MODEL_FEATURES = [
     # Time
     "hour_of_day",
     "is_night",
-    # Per-user profile
-    "user_txn_count",
-    "user_mean_amount",
-    "user_std_amount",
-    "has_thin_history",
-    "amount_deviation",
-    "amount_vs_user_mean_ratio",
-    # Velocity
-    "velocity_count",
-    # Receiver history
-    "dest_seen_count",
+    # Receiver behavioural profile.
+    #
+    # NOTE: the SENDER-side equivalents (user_txn_count, user_mean_amount,
+    # user_amount_deviation, user_velocity_count, ...) are deliberately absent.
+    # We measured PaySim: 99.85% of senders appear exactly once, so on this
+    # dataset those columns are either constant or a rescaled copy of `amount`.
+    # Feeding them in would pad the feature count without adding information,
+    # and worse, `user_amount_deviation` would mean something DIFFERENT at live
+    # time (where customers do have history) than it did during training --
+    # a train/serve mismatch that would silently corrupt live scores.
+    # They are still computed and available for the live explanation layer.
+    "dest_txn_count",
+    "dest_mean_amount",
+    "dest_std_amount",
+    "dest_has_thin_history",
+    "dest_amount_deviation",
+    "dest_amount_ratio",
+    "dest_velocity_count",
     "is_new_receiver",
 ]
 
@@ -547,15 +716,24 @@ FEATURE_DESCRIPTIONS = {
     "is_risky_type": "the transaction is a TRANSFER or CASH_OUT (the only types where fraud occurs)",
     "hour_of_day": "the hour of day the transaction happened",
     "is_night": "the transaction happened during the night",
-    "user_txn_count": "how many past transactions this user has",
-    "user_mean_amount": "this user's typical transaction amount",
-    "user_std_amount": "how much this user's amounts normally vary",
-    "has_thin_history": "this user has almost no transaction history yet",
-    "amount_deviation": "the amount is far above what is normal for this user",
-    "amount_vs_user_mean_ratio": "the amount is many times this user's usual payment",
-    "velocity_count": "an unusual number of transactions in a short time",
-    "dest_seen_count": "how often this receiver has been seen before",
+    # --- Receiver profile (used by the model) ---
+    "dest_txn_count": "how often this receiving account has been used before",
+    "dest_mean_amount": "the amount this receiving account usually collects",
+    "dest_std_amount": "how much the amounts sent to this receiver normally vary",
+    "dest_has_thin_history": "this receiving account is almost brand new",
+    "dest_amount_deviation": "the amount is far above what this receiver normally collects",
+    "dest_amount_ratio": "the amount is many times what this receiver normally collects",
+    "dest_velocity_count": "this account is collecting money unusually rapidly (possible mule account)",
     "is_new_receiver": "the money is going to a receiver never used before",
+    # --- Sender profile (computed for the live layer, not used by the model
+    #     on PaySim -- see the note in MODEL_FEATURES) ---
+    "user_txn_count": "how many past transactions this customer has",
+    "user_mean_amount": "this customer's typical transaction amount",
+    "user_std_amount": "how much this customer's amounts normally vary",
+    "user_has_thin_history": "this customer has almost no transaction history yet",
+    "user_amount_deviation": "the amount is far above what is normal for this customer",
+    "user_amount_ratio": "the amount is many times this customer's usual payment",
+    "user_velocity_count": "this customer made an unusual number of transactions in a short time",
 }
 
 # Simulated-location columns. Carried in the dataset for the Phase 7 dashboard
@@ -655,9 +833,19 @@ def main() -> int:
     print(df_raw.head().to_string())
 
     # ---- 4. Feature engineering --------------------------------------------
+    #
+    # ORDER MATTERS. History features are relationships BETWEEN rows, so they
+    # must be built on the full 6.3M rows. Only then do we sample down.
+    # Sampling first would leave almost every account looking brand new.
     _print_header("4. FEATURE ENGINEERING")
-    df_loc = add_simulated_location(df_raw, cfg)
-    df_feat = engineer_features(df_loc, cfg)
+    df_full = add_simulated_location(df_raw, cfg)
+    df_full = add_account_profiles(df_full, cfg)
+
+    print()
+    df_sample = sample_data(df_full, cfg)
+    del df_full                                  # free the 6.3M-row frame
+
+    df_feat = engineer_features(df_sample, cfg)
 
     X, y, feature_cols = build_feature_matrix(df_feat, cfg)
     print(f"\nEngineered feature matrix: {X.shape[0]:,} rows x {X.shape[1]} features")
@@ -668,7 +856,7 @@ def main() -> int:
     _print_header("5. SAMPLE OF THE ENGINEERED FEATURES")
     preview_cols = [
         "amount", "type", "errorBalanceOrig", "errorBalanceDest",
-        "orig_account_emptied", "amount_deviation", "velocity_count",
+        "orig_account_emptied", "dest_amount_deviation", "dest_velocity_count",
         "is_new_receiver", "location", "impossible_travel", "isFraud",
     ]
     preview_cols = [c for c in preview_cols if c in df_feat.columns]
@@ -677,14 +865,23 @@ def main() -> int:
     _print_header("6. DO THE FEATURES ACTUALLY SEPARATE FRAUD FROM LEGIT?")
     print("(Average value of each clue, for legitimate vs fraudulent rows.\n"
           " Big gaps mean the clue is genuinely useful.)\n")
-    check_cols = [
-        "amount", "errorBalanceOrig", "errorBalanceDest", "orig_account_emptied",
-        "dest_was_empty", "amount_to_balance_ratio", "is_risky_type",
-        "amount_deviation", "velocity_count", "is_new_receiver",
-    ]
-    comparison = df_feat.groupby("isFraud")[check_cols].mean().T
+    comparison = df_feat.groupby("isFraud")[feature_cols].mean().T
     comparison.columns = ["legitimate (0)", "fraud (1)"]
+
+    # A feature that never varies teaches the model nothing. Flag any such
+    # column loudly rather than quietly shipping dead weight into Phase 2.
+    variation = df_feat[feature_cols].std()
+    comparison["USEFUL?"] = [
+        "DEAD (no variation)" if variation[c] == 0 else "" for c in comparison.index
+    ]
     print(comparison.to_string(float_format=lambda v: f"{v:,.3f}"))
+
+    dead = [c for c in feature_cols if variation[c] == 0]
+    if dead:
+        print(f"\n*** WARNING: {len(dead)} feature(s) are constant and teach the "
+              f"model nothing: {dead}")
+    else:
+        print(f"\nAll {len(feature_cols)} model features vary across the dataset.")
 
     # ---- 5. Save ------------------------------------------------------------
     out_path = resolve_path(cfg, cfg["paths"]["processed_data"])
