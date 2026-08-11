@@ -24,6 +24,7 @@ from genai_agent import (
     FraudGenAIAgent,
     find_contradictions,
     find_invented_amounts,
+    find_overstatement,
     find_speculation,
     ollama_is_available,
 )
@@ -152,6 +153,31 @@ def main() -> int:
               f"got {hits[0]['case_id']}")
         check(all(h["similarity"] >= 0.15 for h in hits),
               "weak matches are filtered out")
+
+    # -------------------------------------------------------------------------
+    print("\n7b. Analyst chat sees counterexamples, not just fraud precedent")
+    # THE REGRESSION TEST for a wrong answer that reached the analyst:
+    # "a brand-new receiver ... indicates an account takeover ... strong evidence
+    # of account takeover fraud". Retrieval had returned three fraud cases and no
+    # legitimate ones, so the model never saw LEGIT-001 -- a genuine property
+    # deposit to a first-time receiver that was confirmed and completed.
+    balanced = kb.find_balanced(["Why do we treat a brand-new receiver as risky?"],
+                                per_outcome=2)
+    outcomes = {c["outcome"] for c in balanced}
+    check("legitimate" in outcomes and "fraud" in outcomes,
+          "a fraud-flavoured question still retrieves legitimate counterexamples",
+          f"got outcomes: {outcomes}")
+
+    bad_answer = ("A brand-new receiver is treated as risky because it indicates "
+                  "an account takeover. This is strong evidence of account "
+                  "takeover fraud.")
+    check(find_overstatement(bad_answer) != [],
+          "the original overstated answer is now rejected",
+          "guard must catch a single weak signal presented as proof")
+    check(find_overstatement(
+              "A new receiver raises suspicion but is not conclusive on its own."
+          ) == [],
+          "a properly hedged answer is NOT rejected")
 
     # -------------------------------------------------------------------------
     print("\n8. A degenerate explanation does not crash the agent")

@@ -263,7 +263,36 @@ class CaseKnowledgeBase:
         ])
 
     # -------------------------------------------------------------------------
-    def find_similar(self, reasons: list[str], k: int | None = None) -> list[dict]:
+    def find_balanced(self, terms: list[str], per_outcome: int = 2) -> list[dict]:
+        """
+        Retrieve the closest FRAUD cases AND the closest LEGITIMATE cases.
+
+        >>> WHY BALANCE MATTERS MORE THAN RANKING HERE <<<
+        Ranking purely by similarity is subtly self-confirming. Ask "why is a
+        brand-new receiver risky?" and every top hit is a fraud case, because
+        that is the vocabulary fraud cases are written in. The model then reads
+        three fraud precedents and concludes a new receiver "indicates an
+        account takeover" -- which our own LEGIT-001 (a genuine property deposit
+        to a first-time receiver, confirmed by OTP and completed) flatly
+        contradicts.
+
+        Forcing counterexamples into the context is what lets the model answer
+        "it is one weak signal, and here is a legitimate case that shows why".
+        """
+        fraud = self.find_similar(terms, k=per_outcome, outcome="fraud")
+        # min_similarity=0 on purpose. The relevance threshold exists to stop us
+        # CITING a weak match as precedent, but a counterexample earns its place
+        # by contradicting an overgeneralisation, not by resembling the query.
+        # With the normal 0.15 floor, "why is a brand-new receiver risky?"
+        # retrieved three fraud cases and no legitimate ones -- which is exactly
+        # the input that produced the wrong answer.
+        legit = self.find_similar(terms, k=per_outcome, outcome="legitimate",
+                                  min_similarity=0.0)
+        return fraud + legit
+
+    def find_similar(self, reasons: list[str], k: int | None = None,
+                     outcome: str | None = None,
+                     min_similarity: float | None = None) -> list[dict]:
         """
         Find past cases resembling the current transaction.
 
@@ -285,10 +314,13 @@ class CaseKnowledgeBase:
 
         query = " ".join(reasons)
         try:
-            result = self.collection.query(
-                query_embeddings=[self.embedder.transform(query)],
-                n_results=min(k or self.top_k, len(self.cases)),
-            )
+            query_args = {
+                "query_embeddings": [self.embedder.transform(query)],
+                "n_results": min(k or self.top_k, len(self.cases)),
+            }
+            if outcome is not None:
+                query_args["where"] = {"outcome": outcome}
+            result = self.collection.query(**query_args)
         except Exception as e:
             print(f"  Retrieval failed ({type(e).__name__}) -- continuing without it")
             return []
@@ -296,7 +328,8 @@ class CaseKnowledgeBase:
         # Below this, a "match" is just the nearest of ten documents rather than
         # anything genuinely similar. Citing a weak match as precedent is worse
         # than citing nothing.
-        min_similarity = float(self.cfg["genai"].get("rag_min_similarity", 0.15))
+        if min_similarity is None:
+            min_similarity = float(self.cfg["genai"].get("rag_min_similarity", 0.15))
 
         matches = []
         for meta, distance in zip(result["metadatas"][0], result["distances"][0]):
@@ -383,6 +416,32 @@ def find_speculation(generated: str) -> list[str]:
     """Catch invented claims about what kind of crime this supposedly is."""
     lowered = generated.lower()
     return [t for t in SPECULATION_TERMS if t in lowered]
+
+
+# Phrases that turn a probabilistic signal into a certainty. Fraud detection is
+# built on weak signals that only mean something in combination -- an analyst
+# told that one of them "indicates account takeover" has been misinformed, and
+# our own LEGIT-001 (a genuine payment to a first-time receiver) disproves it.
+OVERSTATEMENT_PATTERNS = [
+    "indicates an account takeover", "indicates account takeover",
+    "is strong evidence of", "strong evidence of account takeover",
+    "proves that", "always means", "guarantees that this is",
+    "confirms fraud", "definitely fraud", "certainly fraud",
+]
+
+
+def find_overstatement(generated: str) -> list[str]:
+    """
+    Catch a single weak signal being presented as proof.
+
+    This exists because the analyst chat answered "why is a brand-new receiver
+    risky?" with "it indicates an account takeover ... strong evidence of
+    account takeover fraud". A new receiver appears in LEGIT-001 too, where the
+    payment was genuine. Teaching an analyst the wrong rule is a real harm, and
+    a confident wrong answer is worse than a hedged one.
+    """
+    lowered = generated.lower()
+    return [p for p in OVERSTATEMENT_PATTERNS if p in lowered]
 
 
 def find_invented_amounts(generated: str, source_facts: str) -> list[str]:
@@ -788,7 +847,8 @@ Write the explanation now."""
         the audit log afterwards can interrogate the system in plain English.
         """
         started = time.perf_counter()
-        cases = self.knowledge_base.find_similar([question], k=3)
+        # Balanced, NOT purely nearest-neighbour -- see find_balanced().
+        cases = self.knowledge_base.find_balanced([question], per_outcome=2)
 
         if not self.available or self.llm is None:
             # Still useful without a language model: hand back the retrieved
@@ -808,10 +868,20 @@ Write the explanation now."""
                     "notes": [self.status],
                     "latency_ms": round(1000 * (time.perf_counter() - started), 1)}
 
-        cases_text = "\n".join(
-            f"  - {c['case_id']} ({c['outcome']}): {c['title']}. {c['lesson']}"
-            for c in cases
-        ) or "  (no relevant past cases)"
+        # Group the cases by outcome in the prompt. Presented as one flat list,
+        # a small model skims the fraud entries and treats the legitimate ones
+        # as noise; under an explicit heading it actually uses them.
+        fraud_cases = [c for c in cases if c["outcome"] == "fraud"]
+        legit_cases = [c for c in cases if c["outcome"] == "legitimate"]
+
+        def render(items):
+            return "\n".join(f"  - {c['case_id']}: {c['title']}. {c['lesson']}"
+                             for c in items) or "  (none)"
+
+        cases_text = (f"CASES THAT TURNED OUT TO BE FRAUD\n{render(fraud_cases)}\n\n"
+                      f"CASES THAT TURNED OUT TO BE LEGITIMATE "
+                      f"(these are counterexamples -- read them before "
+                      f"generalising)\n{render(legit_cases)}")
 
         context_text = ""
         if context:
@@ -829,6 +899,13 @@ RULES:
 - Answer only from the information below. If it does not contain the answer,
   say so plainly instead of guessing.
 - Never invent amounts, names, dates or case numbers.
+- NO SINGLE SIGNAL PROVES FRAUD. Never write that one warning sign "indicates",
+  "means" or "is strong evidence of" a crime. Signals raise suspicion; only a
+  combination justifies action.
+- If the legitimate cases below contradict a general claim, SAY SO. A signal
+  that also appears in genuine payments is a weak signal, and the analyst needs
+  to know that.
+- Do not name a specific crime unless a case below names it.
 - Be concise: at most 4 sentences.
 
 PAST CASES FROM THE KNOWLEDGE BASE
@@ -848,6 +925,25 @@ Answer:"""
                     "similar_cases": cases, "source": "template",
                     "notes": [str(e)],
                     "latency_ms": round(1000 * (time.perf_counter() - started), 1)}
+
+        # The same guards the explanation path uses. chat() originally had NONE,
+        # which is how "a brand-new receiver indicates an account takeover"
+        # reached an analyst unchallenged.
+        problems = find_speculation(text) + find_overstatement(text)
+        if problems:
+            cited = "\n".join(
+                f"  - {c['case_id']} ({c['outcome']}): {c['title']}\n"
+                f"    Lesson: {c['lesson']}" for c in cases
+            )
+            return {
+                "answer": ("The assistant's draft answer overstated the evidence "
+                           f"({', '.join(problems[:2])}), so it was withheld. "
+                           "Judge from the source cases directly:\n" + cited),
+                "similar_cases": cases,
+                "source": "template",
+                "notes": [f"answer rejected: {', '.join(problems)}"],
+                "latency_ms": round(1000 * (time.perf_counter() - started), 1),
+            }
 
         return {"answer": text or "No answer produced.", "similar_cases": cases,
                 "source": "ollama", "notes": [],
