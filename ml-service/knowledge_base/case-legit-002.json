@@ -1,0 +1,15 @@
+{
+  "case_id": "LEGIT-002",
+  "outcome": "legitimate",
+  "title": "Routine salary payment to an established receiver",
+  "summary": "A monthly payment of a consistent amount to an employer-linked account seen for three years.",
+  "signals": [
+    "this receiver has been paid before",
+    "the amount is in line with what this receiver normally collects",
+    "the payment was made during normal hours",
+    "the sender still has money left afterwards"
+  ],
+  "decision": "APPROVE",
+  "resolution": "Approved automatically in under a second. No customer contact.",
+  "lesson": "The overwhelming majority of payments look like this. A fraud system is judged as much on how quietly it handles these as on what it catches."
+}

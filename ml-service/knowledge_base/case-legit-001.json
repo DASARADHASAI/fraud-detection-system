@@ -1,0 +1,15 @@
+{
+  "case_id": "LEGIT-001",
+  "outcome": "legitimate",
+  "title": "Large one-off property deposit from a long-standing customer",
+  "summary": "A customer with eleven years of history transferred a very large sum to a solicitor's client account for a house purchase. The amount was far outside their normal range.",
+  "signals": [
+    "the amount is many times this customer's usual payment",
+    "the money is going to a receiver never used before",
+    "the sender still has money left afterwards",
+    "the payment was made during normal hours"
+  ],
+  "decision": "OTP_CONFIRM",
+  "resolution": "Customer confirmed by OTP within seconds. Payment completed.",
+  "lesson": "A large unusual amount is not fraud on its own. Long history plus a partial balance plus normal hours point to a genuine life event. Confirm, do not block."
+}

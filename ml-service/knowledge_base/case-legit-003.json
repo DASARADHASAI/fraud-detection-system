@@ -1,0 +1,14 @@
+{
+  "case_id": "LEGIT-003",
+  "outcome": "legitimate",
+  "title": "Holiday spending abroad, flagged then cleared",
+  "summary": "A customer travelling overseas made several payments from an unfamiliar location. Amounts were modest and the travel time between locations was physically plausible.",
+  "signals": [
+    "the payment was made in a city this customer has not transacted from before",
+    "the amounts are in line with this customer's normal spending",
+    "the distance travelled is physically possible in the time elapsed"
+  ],
+  "decision": "OTP_CONFIRM",
+  "resolution": "Customer confirmed. Later payments on the trip were approved without challenge.",
+  "lesson": "A new location alone is weak evidence. It matters only when the travel is physically impossible, or when it arrives with other signals."
+}

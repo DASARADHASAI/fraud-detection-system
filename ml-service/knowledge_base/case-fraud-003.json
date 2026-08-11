@@ -1,0 +1,14 @@
+{
+  "case_id": "FRAUD-003",
+  "outcome": "fraud",
+  "title": "Impossible travel: two payments 1,700 km apart within the same hour",
+  "summary": "A card was used in Mumbai and then, thirty-five minutes later, in Kolkata. No aircraft covers that distance in that time, so at least one payment was not made by the cardholder.",
+  "signals": [
+    "two payments too far apart in too little time",
+    "the second payment was made in a city this customer has never transacted from",
+    "the payment was made in the middle of the night"
+  ],
+  "decision": "BLOCK",
+  "resolution": "Second payment blocked automatically. Card reissued.",
+  "lesson": "Impossible travel is a hard physical contradiction, not a probability. It does not need a model \u2014 it needs a rule, and the rule should override any score."
+}

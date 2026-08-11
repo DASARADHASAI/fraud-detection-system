@@ -1,0 +1,14 @@
+{
+  "case_id": "FRAUD-005",
+  "outcome": "fraud",
+  "title": "Small test payment followed by a large one",
+  "summary": "A trivial payment of a few rupees went to a new receiver and was approved. Six minutes later the same receiver was sent a very large amount. The small payment was the attacker confirming the stolen credentials worked.",
+  "signals": [
+    "the money is going to a receiver never used before",
+    "an unusual number of transactions in a short time",
+    "the amount is many times this customer's usual payment"
+  ],
+  "decision": "BLOCK",
+  "resolution": "Second payment blocked. The first, trivial payment was not recovered and was not worth pursuing.",
+  "lesson": "A tiny payment to a new receiver is not harmless \u2014 it is often reconnaissance. The pattern is only visible if you link the two payments."
+}

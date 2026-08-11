@@ -1,0 +1,15 @@
+{
+  "case_id": "FRAUD-001",
+  "outcome": "fraud",
+  "title": "Account takeover: entire balance transferred to a brand-new receiver",
+  "summary": "A customer's credentials were stolen through a phishing page. Within minutes the attacker moved the entire account balance in a single TRANSFER to an account created the same day. The sending account was left at exactly zero.",
+  "signals": [
+    "this payment empties the sender's account completely",
+    "the money is going to a receiver never used before",
+    "the receiving account was empty beforehand, which is typical of a freshly-created mule account",
+    "the amount is far above what is normal for this customer"
+  ],
+  "decision": "BLOCK",
+  "resolution": "Blocked automatically before settlement. Customer confirmed they did not authorise it. Funds retained.",
+  "lesson": "A full-balance transfer to an account with no history is the single strongest account-takeover pattern. Block first, ask afterwards."
+}

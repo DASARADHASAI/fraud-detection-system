@@ -145,6 +145,41 @@ genai:
   temperature: 0.2                # Low = factual and consistent, not creative
   request_timeout_seconds: 30
   fallback_to_template: true
+  max_tokens: 260                 # Keep explanations short; also caps latency
+
+  # Which decisions get a language-model narration. Everything else uses the
+  # instant Phase 3 template sentence, which is always correct.
+  #
+  # APPROVE is deliberately absent. Routine approvals are ~94% of traffic,
+  # nobody reads an explanation for a payment that simply went through, and
+  # llama3.2's weakest output was exactly here -- it repeatedly wrote
+  # "this payment was cleared BECAUSE [warning sign]". Add "APPROVE" to this
+  # list if you want narration everywhere and can accept that.
+  narrate_decisions: ["BLOCK", "OTP_CONFIRM"]
+
+  # --- RAG over knowledge_base/ ---
+  rag_top_k: 3                    # How many past cases to retrieve per decision
+  rag_min_similarity: 0.15        # Below this, a "match" is just the nearest of
+                                  # ten documents, not a real precedent
+
+  # Retrieval needs to turn text into vectors. IMPORTANT: llama3.2 CANNOT do
+  # this -- Ollama returns HTTP 501 for embeddings on that model, because it is
+  # generation-only. So we default to TF-IDF, which is built into scikit-learn,
+  # runs offline, needs no extra download, and is perfectly adequate for a
+  # corpus of ten documents.
+  #
+  # If you prefer neural embeddings, pull a dedicated embedding model:
+  #     ollama pull nomic-embed-text
+  # then set use_ollama_embeddings: true below. The system detects at startup
+  # whether the model is actually there and falls back to TF-IDF if it is not.
+  use_ollama_embeddings: false
+  embedding_model: "nomic-embed-text"
+
+  # Safety valve: if the language model states a money figure that was not in
+  # the facts we gave it, we throw its answer away and use the template instead.
+  # An invented amount in a fraud explanation shown to a customer is worse than
+  # a plain sentence.
+  reject_hallucinated_amounts: true
 
 # ----------------------------------------------------------------------------
 # Phase 3 -- Explainability

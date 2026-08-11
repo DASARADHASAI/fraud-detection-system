@@ -1,0 +1,14 @@
+{
+  "case_id": "FRAUD-002",
+  "outcome": "fraud",
+  "title": "Mule account collecting rapid transfers from many victims",
+  "summary": "One receiving account took in fourteen payments from unrelated senders within two hours. Each individual payment looked ordinary; the pattern only appeared on the receiver side.",
+  "signals": [
+    "this receiver has taken in an unusual number of payments in the last 24 hours",
+    "the receiving account is almost brand new, so there is little history to judge it against",
+    "the amount is many times what this receiver normally collects"
+  ],
+  "decision": "BLOCK",
+  "resolution": "Receiver account frozen and reported. Eleven of fourteen payments recovered.",
+  "lesson": "Watch the receiver, not just the sender. Velocity into one account is a mule signature that per-customer monitoring cannot see."
+}

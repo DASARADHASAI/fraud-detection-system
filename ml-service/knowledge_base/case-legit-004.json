@@ -1,0 +1,15 @@
+{
+  "case_id": "LEGIT-004",
+  "outcome": "legitimate",
+  "title": "Everyday merchant payment on an established account",
+  "summary": "An ordinary retail purchase at a merchant the customer uses regularly, for a typical amount, in the afternoon.",
+  "signals": [
+    "this receiver has been paid before",
+    "this is an ordinary PAYMENT",
+    "the amount is in line with what this receiver normally collects",
+    "the receiving account already held a balance"
+  ],
+  "decision": "APPROVE",
+  "resolution": "Approved automatically.",
+  "lesson": "An established receiver plus a typical amount is the clearest possible approve. These cases exist in the knowledge base so the retriever can recognise normality, not only danger."
+}

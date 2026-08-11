@@ -1,0 +1,14 @@
+{
+  "case_id": "FRAUD-006",
+  "outcome": "fraud",
+  "title": "Authorised push payment: victim tricked into paying a fake account",
+  "summary": "A customer received a convincing call claiming to be from their bank's fraud team and was persuaded to move their savings to a 'safe account'. The customer authorised the payment themselves, from their own trusted device.",
+  "signals": [
+    "this payment empties the sender's account completely",
+    "the money is going to a receiver never used before",
+    "the amount is far above what is normal for this customer"
+  ],
+  "decision": "OTP_CONFIRM",
+  "resolution": "Customer confirmed the payment when challenged, because they believed the caller. Funds were lost. Case is retained as a reminder of the limits of OTP.",
+  "lesson": "OTP confirms that the account holder approved a payment \u2014 not that the payment is safe. A trusted device proves identity, never intent. This is the one case where the step-up path fails by design."
+}
