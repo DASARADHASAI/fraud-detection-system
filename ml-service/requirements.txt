@@ -1,0 +1,30 @@
+# ============================================================================
+# Python dependencies for the ML service.
+# Install with:   pip install -r requirements.txt   (inside the venv)
+# ============================================================================
+
+# --- Core data handling ---
+pandas>=2.2
+numpy>=1.26
+pyyaml>=6.0            # Reads config.yaml
+
+# --- Machine learning ---
+scikit-learn>=1.5      # Isolation Forest + Random Forest + metrics
+imbalanced-learn>=0.12 # SMOTE (applied to the TRAINING SET ONLY)
+joblib>=1.4            # Saving/loading trained models
+
+# --- Explainability (Phase 3) ---
+shap>=0.46             # Explains WHY the model made each decision
+
+# --- API layer (Phase 5) ---
+flask>=3.0
+flask-cors>=4.0        # Lets the Spring Boot dashboard call this service
+requests>=2.32
+
+# --- GenAI layer (Phase 4). Optional at runtime: if Ollama is not running,
+#     the code falls back to a plain template sentence. ---
+langchain>=0.3
+langchain-community>=0.3
+langchain-ollama>=0.2
+langgraph>=0.2
+chromadb>=0.5          # Vector store for RAG over past fraud cases

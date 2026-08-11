@@ -1,0 +1,149 @@
+# ============================================================================
+# Central configuration for the Fraud Detection System.
+#
+# WHY THIS FILE EXISTS:
+# Both the Python ML service and the Java Spring Boot backend read their
+# settings from here. Nothing (ports, thresholds, file paths) is hard-coded
+# inside the code. To tune the system, you edit this file -- not the source.
+# ============================================================================
+
+project:
+  name: "Explainable Real-Time Fraud Detection Using a Hybrid ML Model"
+  random_state: 42          # Fixed seed EVERYWHERE so results are reproducible.
+
+# ----------------------------------------------------------------------------
+# Where files live. Paths are relative to the ml-service/ folder.
+# ----------------------------------------------------------------------------
+paths:
+  raw_data: "data/transactions.csv"          # The PaySim CSV you download
+  processed_data: "data/processed.csv"       # Output of feature engineering
+  models_dir: "models"                       # Saved model + scaler files
+  knowledge_base_dir: "knowledge_base"       # Past fraud cases for RAG (Phase 4)
+  results_file: "../docs/results.md"         # Evaluation metrics get written here
+
+# ----------------------------------------------------------------------------
+# Phase 1 -- Data loading and feature engineering
+# ----------------------------------------------------------------------------
+data:
+  # PaySim has ~6.3 million rows. That is slow to train on a laptop.
+  # We take a random sample BUT keep every single fraud row (they are rare
+  # and precious -- only ~0.13% of the data is fraud).
+  sample_size: 200000
+  keep_all_fraud: true
+
+  # In PaySim, fraud ONLY ever happens in TRANSFER and CASH_OUT transactions.
+  # We keep all types as training data but flag these two as the risky ones.
+  fraud_capable_types: ["TRANSFER", "CASH_OUT"]
+
+  # This column is the dataset's own naive built-in rule. Using it as a feature
+  # would be "data leakage" -- the model would cheat by copying the answer.
+  drop_columns: ["isFlaggedFraud"]
+
+  # Velocity feature: how many transactions did this user make recently?
+  # PaySim's "step" column = 1 hour of simulated time.
+  velocity_window_steps: 24        # Look back 24 steps = 24 simulated hours
+
+  # A user needs at least this many PAST transactions before we trust their
+  # personal average. Below this we fall back to the global average, exactly
+  # as a real bank does for a brand-new customer.
+  min_user_history: 3
+
+  # The location data is simulated by us (PaySim has none), so by default we do
+  # NOT feed it to the model -- that would be training on invented evidence.
+  # Impossible travel is applied as a live RULE in Phase 7 instead.
+  include_simulated_location_features: false
+
+# ----------------------------------------------------------------------------
+# SIMULATED location data.
+#
+# IMPORTANT / BE HONEST IN THE REPORT: PaySim has NO location or geo column.
+# Real impossible-travel detection needs one, so we generate a plausible city
+# per transaction purely for demonstration. This is clearly labelled as
+# simulated everywhere it appears. The live impossible-travel check also runs
+# in the dashboard layer (Phase 7) on real submitted transactions.
+# ----------------------------------------------------------------------------
+simulated_location:
+  enabled: true
+  cities:
+    - { name: "Mumbai",     lat: 19.0760, lon: 72.8777 }
+    - { name: "Delhi",      lat: 28.7041, lon: 77.1025 }
+    - { name: "Bengaluru",  lat: 12.9716, lon: 77.5946 }
+    - { name: "Hyderabad",  lat: 17.3850, lon: 78.4867 }
+    - { name: "Chennai",    lat: 13.0827, lon: 80.2707 }
+    - { name: "Kolkata",    lat: 22.5726, lon: 88.3639 }
+    - { name: "Vijayawada", lat: 16.5062, lon: 80.6480 }
+    - { name: "Pune",       lat: 18.5204, lon: 73.8567 }
+  # Fraction of users who get a deliberately impossible location jump injected,
+  # so the impossible-travel demo has something to catch.
+  impossible_jump_user_fraction: 0.02
+  # Travel faster than this is physically impossible -> auto-block.
+  max_plausible_speed_kmph: 900.0
+
+# ----------------------------------------------------------------------------
+# Phase 2 -- Hybrid model settings (used later, listed now so it is all in one place)
+# ----------------------------------------------------------------------------
+model:
+  test_size: 0.2                  # 20% of data held back, never touched in training
+
+  isolation_forest:
+    n_estimators: 150
+    contamination: 0.02           # Expected share of anomalies
+    max_samples: "auto"
+
+  random_forest:
+    n_estimators: 200
+    max_depth: 15
+    class_weight: "balanced"
+    n_jobs: -1                    # Use all M4 cores
+
+  # The hybrid score = weighted blend of the two models.
+  hybrid:
+    random_forest_weight: 0.7     # Supervised model is trusted more...
+    isolation_forest_weight: 0.3  # ...but the anomaly detector still gets a vote
+    # If the two models strongly disagree, we raise a "models_disagree" flag
+    # and force the transaction into the step-up (OTP) path.
+    disagreement_threshold: 0.4
+
+# ----------------------------------------------------------------------------
+# Decision thresholds -- these drive the FULLY AUTOMATIC routing (Phase 6).
+# There is no human reviewer anywhere in this system.
+# ----------------------------------------------------------------------------
+decision:
+  approve_below: 0.35             # score < 0.35            -> APPROVE automatically
+  block_above: 0.75               # score > 0.75            -> BLOCK automatically
+                                  # anything in between, OR models_disagree
+                                  # -> automatic step-up (quick signals, then OTP)
+  otp_timeout_seconds: 60         # No reply in time = treat as denied = BLOCK
+
+# ----------------------------------------------------------------------------
+# Services and ports
+# ----------------------------------------------------------------------------
+services:
+  ml_service:
+    host: "0.0.0.0"
+    # Port 5001, NOT 5000 -- macOS AirPlay Receiver occupies port 5000.
+    port: 5001
+    debug: false
+  backend:
+    port: 8080
+    ml_service_url: "http://localhost:5001"
+    ml_timeout_seconds: 3         # If Python is slow/down, fall back safely
+
+# ----------------------------------------------------------------------------
+# Phase 4 -- GenAI layer. Fully optional: if Ollama is not running, the system
+# falls back to a plain template sentence built from the SHAP reasons.
+# ----------------------------------------------------------------------------
+genai:
+  enabled: true
+  provider: "ollama"
+  model: "llama3.2"
+  base_url: "http://localhost:11434"
+  temperature: 0.2                # Low = factual and consistent, not creative
+  request_timeout_seconds: 30
+  fallback_to_template: true
+
+# ----------------------------------------------------------------------------
+# Phase 3 -- Explainability
+# ----------------------------------------------------------------------------
+explain:
+  top_n_reasons: 5                # Show the top 5 features behind each decision

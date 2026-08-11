@@ -1,0 +1,34 @@
+# --- Python ---
+ml-service/venv/
+__pycache__/
+*.pyc
+.Python
+
+# --- Datasets (far too big for Git; see docs/DATASET.md to re-download) ---
+ml-service/data/*.csv
+ml-service/data/*.zip
+
+# --- Trained model files (regenerate with train_model.py) ---
+ml-service/models/*.pkl
+ml-service/models/*.joblib
+
+# --- Chroma vector store (regenerated from knowledge_base/) ---
+ml-service/chroma_db/
+ml-service/.chroma/
+
+# --- Java / Maven ---
+backend/target/
+*.class
+
+# --- H2 database files ---
+*.db
+*.mv.db
+*.trace.db
+
+# --- macOS ---
+.DS_Store
+
+# --- IDEs ---
+.idea/
+.vscode/
+*.iml
