@@ -34,13 +34,67 @@ step-up (OTP) path rather than being silently approved or blocked.
 ## Build status
 
 - [x] **Phase 1** — Data loading + feature engineering (`ml-service/features.py`)
-- [ ] Phase 2 — Hybrid model + evaluation
-- [ ] Phase 3 — SHAP explainability
-- [ ] Phase 4 — GenAI agent (Ollama + LangChain, with template fallback)
-- [ ] Phase 5 — Flask API
+- [x] **Phase 2** — Hybrid model + evaluation (`ml-service/train_model.py`)
+- [x] **Phase 3** — SHAP explainability (`ml-service/explain.py`)
+- [x] **Phase 4** — GenAI agent, optional (`ml-service/genai_agent.py`)
+- [x] **Phase 5** — Flask API on port 5001 (`ml-service/app.py`)
 - [ ] Phase 6 — Spring Boot backend + automatic routing
 - [ ] Phase 7 — Dashboard
 - [ ] Phase 8 — Testing
+
+## Running the ML service
+
+```bash
+cd "/Users/lucky/Documents/fraud detection system/ml-service"
+
+# one-time: build features, then train (Phase 1 ~51s, Phase 2 ~2min)
+./venv/bin/python features.py
+./venv/bin/python train_model.py
+
+# start the API
+./venv/bin/python app.py            # http://localhost:5001
+```
+
+Optional, for the GenAI narration — the system runs fine without it:
+
+```bash
+ollama serve                        # in another terminal
+ollama pull llama3.2
+```
+
+### Endpoints
+
+| Method | Path | Speed | Purpose |
+|---|---|---|---|
+| GET | `/health` | instant | Service, model and Ollama status |
+| GET | `/config` | instant | Decision thresholds, so Java need not duplicate them |
+| POST | `/predict` | **~28 ms** | Score a transaction — called on every payment |
+| POST | `/explain` | **~3.7 s** | Plain-language write-up — called only when someone opens a transaction |
+| POST | `/chat` | ~3 s | Analyst question, grounded in `knowledge_base/` |
+| POST | `/reset` | instant | Clear demo history (testing only) |
+
+```bash
+curl -X POST localhost:5001/predict -H 'Content-Type: application/json' -d '{
+  "step": 400, "type": "TRANSFER", "amount": 3244067.13,
+  "nameOrig": "C111", "oldbalanceOrg": 3244067.13, "newbalanceOrig": 0,
+  "nameDest": "C999", "oldbalanceDest": 0, "newbalanceDest": 0
+}'
+```
+
+**`/predict` and `/explain` are separate on purpose.** Scoring takes 28 ms;
+llama3.2 narration takes 3.7 s — a **135× difference**. A payment cannot wait
+three seconds for prose nobody may ever read, so `/predict` returns the score
+plus the SHAP reasons (already human-readable) and the narration is fetched
+lazily. Measured: with three `/explain` calls in flight, `/predict`'s median
+rises only from 28 ms to 111 ms.
+
+### Tests
+
+```bash
+./venv/bin/python test_explain.py     # 13 checks — SHAP correctness
+./venv/bin/python test_genai.py       # 36 checks — GenAI guards and fallbacks
+./venv/bin/python test_api.py         # 44 checks — features, validation, HTTP
+```
 
 ---
 
