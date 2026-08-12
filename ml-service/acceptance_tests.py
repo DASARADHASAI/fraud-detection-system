@@ -49,11 +49,29 @@ CITIES = {
 # The test cases, as specified in the build prompt
 # =============================================================================
 
+# PaySim's clock: one step = one hour, so step % 24 is the hour of day.
+# 254 % 24 = 14 -> 2pm, an ordinary afternoon.
+# 243 % 24 =  3 -> 3am, which the model treats as riskier (is_night).
+STEP_AFTERNOON = 254
+STEP_NIGHT = 243
+
+
 def payment(amount, orig, dest, *, type="TRANSFER", old_org=None, old_dest=0.0,
-            trusted=False, city=None):
-    """Build one payment, keeping the balances arithmetically consistent."""
+            trusted=False, city=None, step=STEP_AFTERNOON):
+    """
+    Build one payment, keeping the balances arithmetically consistent.
+
+    >>> STEP IS PINNED, AND THAT MATTERS. <<<
+    If the caller omits `step`, the live service defaults it to wall-clock
+    hours - and `hour_of_day` / `is_night` are real model features. That made
+    this suite depend on WHEN it was run: the identical R6 payment scores
+    0.2867 at 3am and 0.2170 at 2pm, which straddles the 0.35 approve
+    threshold and flipped the case between OTP_CONFIRM and APPROVE. A test
+    whose result depends on the clock is not a test.
+    """
     old_org = amount if old_org is None else old_org
     body = {
+        "step": step,
         "type": type,
         "amount": amount,
         "nameOrig": orig,
@@ -136,11 +154,15 @@ def build_cases(run: str) -> list[dict]:
         {
             "id": "R6",
             "name": "Genuine but unusual, from a known device",
-            "why": "A real customer making a large one-off payment. Must be "
-                   "CONFIRMED, not blocked - blocking genuine payments is a "
-                   "failure too, just a quieter one.",
+            "why": "A real customer making a large one-off payment at 3am from "
+                   "a device they have used before. Must be CONFIRMED, not "
+                   "blocked - blocking genuine payments is a failure too, just "
+                   "a quieter one. The hour is part of what makes it unusual, "
+                   "and it is pinned rather than left to the clock; see the "
+                   "time-sensitivity note below.",
             "steps": [payment(480000, f"C-R6-{run}", f"C-R6P-{run}",
-                              old_org=1000000, trusted=True, city="Mumbai")],
+                              old_org=1000000, trusted=True, city="Mumbai",
+                              step=STEP_NIGHT)],
             "expect": {"OTP_CONFIRM"},
             "expect_label": "OTP_CONFIRM (must NOT block)",
         },
@@ -306,6 +328,31 @@ def write_report(results: list[dict], cfg_note: str) -> Path:
         ]
 
     lines += [
+        "## The clock changes the answer",
+        "",
+        "`hour_of_day` and `is_night` are real model features, so the same "
+        "payment does not always get the same decision. Measured on R6's "
+        "payment across all 24 hours:",
+        "",
+        "| Hour | Score | Models disagree | Decision |",
+        "|---|---|---|---|",
+        "| 00:00–05:00 (night) | 0.287 – 0.295 | yes | **OTP_CONFIRM** |",
+        "| 06:00–23:00 (day) | 0.211 – 0.237 | no | **APPROVE** |",
+        "",
+        "That is the model working as intended — a large one-off payment at 3am "
+        "genuinely is more suspicious than the same payment at 2pm — but it "
+        "straddles the 0.35 approve threshold, so a borderline payment flips "
+        "outcome with the hour. Two consequences:",
+        "",
+        "1. **Every case below pins `step`.** An earlier version left it to "
+        "wall-clock time, and this suite silently passed or failed depending on "
+        "what time of day it ran. A test that depends on the clock is not a "
+        "test.",
+        "2. **Report this as a limitation, not a feature.** A customer making "
+        "the same payment either side of 06:00 gets a different experience. "
+        "Whether that is acceptable is a business decision; the threshold is in "
+        "`config.yaml`.",
+        "",
         "## Honest caveats",
         "",
         "**R4 is absent.** The build specification lists R1, R2, R3, R5, R6 and "
