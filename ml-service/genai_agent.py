@@ -504,6 +504,7 @@ class FraudGenAIAgent:
         self.verbose = verbose
 
         self.available, self.status = ollama_is_available(self.cfg)
+        self._last_probe = time.time()
         if verbose:
             print(f"  Ollama: {self.status}")
 
@@ -531,6 +532,49 @@ class FraudGenAIAgent:
                 print(f"  Knowledge base failed to load ({type(e).__name__}: {e})")
 
         self.graph = self._build_graph()
+
+    # How often to re-check for Ollama once we have decided it is missing.
+    RECHECK_SECONDS = 30
+
+    def _ensure_available(self) -> None:
+        """
+        Re-probe for Ollama if we previously found it absent.
+
+        >>> WITHOUT THIS, DEGRADING IS A ONE-WAY DOOR. <<<
+        Availability used to be checked exactly once, at construction. Start the
+        fraud service before Ollama - which is the normal order, since Ollama is
+        the optional part - and the agent stayed in template mode forever, even
+        after Ollama came up. "Falls back gracefully" has to include coming
+        back, or it is just failing quietly with extra steps.
+
+        Cheap: only runs when we are already in template mode, and at most once
+        every RECHECK_SECONDS.
+        """
+        if self.available:
+            return
+        if time.time() - self._last_probe < self.RECHECK_SECONDS:
+            return
+        self._last_probe = time.time()
+
+        available, status = ollama_is_available(self.cfg)
+        if not available:
+            self.status = status
+            return
+
+        try:
+            from langchain_ollama import ChatOllama
+            self.llm = ChatOllama(
+                model=self.g["model"],
+                base_url=self.g["base_url"],
+                temperature=float(self.g.get("temperature", 0.2)),
+                num_predict=int(self.g.get("max_tokens", 260)),
+            )
+            self.available = True
+            self.status = status + " (reconnected)"
+            if self.verbose:
+                print(f"  Ollama came back: {self.status}")
+        except Exception as e:
+            self.status = f"Ollama present but LangChain could not connect: {e}"
 
     # -------------------------------------------------------------------------
     def _build_graph(self):
@@ -749,6 +793,7 @@ Write the explanation now."""
         whether you got a language-model narration or the template.
         """
         started = time.perf_counter()
+        self._ensure_available()
 
         reasons = [r["reason"] for r in explanation.get("reasons", [])]
         protective = [p["reason"] for p in explanation.get("protective_factors", [])]
@@ -847,6 +892,7 @@ Write the explanation now."""
         the audit log afterwards can interrogate the system in plain English.
         """
         started = time.perf_counter()
+        self._ensure_available()
         # Balanced, NOT purely nearest-neighbour -- see find_balanced().
         cases = self.knowledge_base.find_balanced([question], per_outcome=2)
 
