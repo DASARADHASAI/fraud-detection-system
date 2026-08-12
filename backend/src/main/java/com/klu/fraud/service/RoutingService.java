@@ -170,6 +170,7 @@ public class RoutingService {
         }
 
         txn.setProcessingMillis(System.currentTimeMillis() - started);
+        txn.setExplanation(explanation);
         txn.setReasonsJson(toJson(reasons));
         txn = transactions.save(txn);
 

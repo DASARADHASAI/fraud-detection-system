@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fraud Desk — automatic decisions, explained</title>
+<script src="/vendor/chart.umd.min.js"></script>
+<style>
+/* ============================================================================
+   FRAUD DESK
+   ----------------------------------------------------------------------------
+   Design notes for whoever picks this up:
+
+   THE REASON IS THE HERO, NOT THE SCORE. In most fraud dashboards the amount is
+   set large and the reason hides in a tooltip. This project is called
+   "explainable", so the plain-language sentence gets the same optical weight as
+   the money. That is the one deliberate risk in this layout.
+
+   COLOUR IS VALIDATED, NOT CHOSEN BY EYE. The three decision colours were run
+   through a colour-blindness check. The obvious traffic-light set
+   (green/amber/red) FAILED: amber against green is dE 5.9 for protanopia, and
+   red against amber is 14.2 even with normal vision. Violet replaced amber -
+   which is also more honest, because OTP is not "medium fraud", it is a
+   different kind of outcome: we are asking. Every colour also carries a text
+   label, so nothing depends on colour alone.
+
+   LIGHT MODE ONLY, on purpose. A committed single look, painted explicitly,
+   beats an automatic dark flip whose contrast nobody has checked.
+
+   Chart.js is vendored in /vendor - no CDN, so the demo works with no internet.
+   ========================================================================== */
+
+:root {
+  --ink:      #14181D;
+  --paper:    #EEF1F0;
+  --card:     #FFFFFF;
+  --rule:     #D6DCDA;
+  --muted:    #667079;
+  --faint:    #97A0A6;
+
+  /* Validated decision palette - see note above */
+  --approve:  #0F7A52;
+  --ask:      #5A3FD6;
+  --block:    #BE2B22;
+  --approve-wash: #E7F2EC;
+  --ask-wash:     #ECE9FB;
+  --block-wash:   #FAEAE8;
+
+  --display: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI",
+             system-ui, sans-serif;
+  --mono: "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Small caps utility label - used for every field and section marker */
+.label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+  display: block;
+}
+
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------- masthead */
+.masthead {
+  border-bottom: 1px solid var(--rule);
+  background: var(--card);
+  padding: 18px 28px;
+  display: flex;
+  align-items: baseline;
+  gap: 22px;
+  flex-wrap: wrap;
+}
+.masthead h1 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.masthead .tagline {
+  color: var(--muted);
+  font-size: 13.5px;
+  flex: 1 1 320px;
+}
+.health { display: flex; gap: 16px; align-items: center; }
+.health span { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  display: inline-block; margin-right: 6px;
+  background: var(--faint);
+}
+.dot.up { background: var(--approve); }
+.dot.down { background: var(--block); }
+
+/* ------------------------------------------------------------------ layout */
+main { padding: 24px 28px 60px; max-width: 1320px; margin: 0 auto; }
+
+.desk {
+  display: grid;
+  grid-template-columns: 372px minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+@media (max-width: 940px) {
+  .desk { grid-template-columns: 1fr; }
+  main { padding: 18px 16px 48px; }
+}
+
+.panel {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+}
+.panel > header {
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.panel > header h2 {
+  margin: 4px 0 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* ----------------------------------------------------- the verdict slab -- */
+/* The signature element. The newest decision, set large, with the plain
+   language reason directly beneath it at near-headline size. */
+.verdict {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-left: 6px solid var(--faint);
+  border-radius: 3px;
+  padding: 22px 26px 20px;
+  margin-bottom: 22px;
+  min-height: 148px;
+}
+.verdict.is-approve { border-left-color: var(--approve); }
+.verdict.is-ask     { border-left-color: var(--ask); }
+.verdict.is-block   { border-left-color: var(--block); }
+
+.verdict-word {
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 1;
+  margin: 6px 0 0;
+}
+.is-approve .verdict-word { color: var(--approve); }
+.is-ask     .verdict-word { color: var(--ask); }
+.is-block   .verdict-word { color: var(--block); }
+
+.verdict-because {
+  font-size: 19px;
+  line-height: 1.42;
+  max-width: 62ch;
+  margin: 12px 0 0;
+  color: var(--ink);
+}
+.verdict-meta {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.verdict-meta b { color: var(--ink); font-weight: 600; }
+
+/* The decision trace. Genuinely a sequence, so step markers earn their place. */
+.trace { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.trace-step {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  padding: 4px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--muted);
+  background: var(--paper);
+}
+.trace-step.fired { border-color: currentColor; }
+.is-approve .trace-step.fired { color: var(--approve); background: var(--approve-wash); }
+.is-ask     .trace-step.fired { color: var(--ask);     background: var(--ask-wash); }
+.is-block   .trace-step.fired { color: var(--block);   background: var(--block-wash); }
+
+/* Opening state, before anything has been sent */
+.thesis h2 { font-size: 26px; font-weight: 800; letter-spacing: -0.03em; margin: 6px 0 0; }
+.thesis p { color: var(--muted); max-width: 60ch; margin: 8px 0 0; font-size: 15px; }
+.outcomes { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.outcome {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 12.5px; color: var(--muted);
+  border: 1px solid var(--rule); border-radius: 2px;
+  padding: 7px 11px;
+}
+.swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+/* ------------------------------------------------------------------- form */
+form { padding: 16px 18px 18px; }
+.field { margin-bottom: 12px; }
+.field input, .field select {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 13.5px;
+  padding: 8px 10px;
+  margin-top: 5px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--card);
+  color: var(--ink);
+}
+.field input:focus, .field select:focus,
+button:focus-visible, .row:focus-visible {
+  outline: 2px solid var(--ask);
+  outline-offset: 2px;
+}
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.check { display: flex; align-items: center; gap: 8px; margin: 14px 0 4px; }
+.check input { width: 15px; height: 15px; margin: 0; accent-color: var(--ask); }
+.check label { font-size: 13px; }
+.check .hint { color: var(--faint); font-size: 11.5px; display: block; margin-top: 2px; }
+
+button.send {
+  width: 100%;
+  margin-top: 14px;
+  padding: 11px;
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--card);
+  background: var(--ink);
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+}
+button.send:hover { background: #262d35; }
+button.send:disabled { background: var(--faint); cursor: progress; }
+
+/* Client-side travel warning */
+.travel-warn {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--block);
+  background: var(--block-wash);
+  border-radius: 2px;
+  font-size: 12.5px;
+  color: var(--block);
+  display: none;
+}
+.travel-warn.show { display: block; }
+
+/* -------------------------------------------------------------- scenarios */
+.scenarios { padding: 6px 18px 18px; }
+.scenario {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--rule);
+  padding: 11px 2px;
+  cursor: pointer;
+  font-family: var(--display);
+  font-size: 13.5px;
+  color: var(--ink);
+  display: flex;
+  gap: 11px;
+  align-items: baseline;
+}
+.scenario:hover { background: var(--paper); }
+.scenario .tag {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--faint);
+  letter-spacing: 0.06em;
+  flex: 0 0 22px;
+}
+.scenario .expect { color: var(--muted); font-size: 11.5px; display: block; }
+
+/* ------------------------------------------------------------------- feed */
+.feed-list { max-height: 620px; overflow-y: auto; }
+.row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: var(--card);
+  border-top: 1px solid var(--rule);
+  border-left: 4px solid transparent;
+  padding: 13px 18px;
+  cursor: pointer;
+  font-family: var(--display);
+  color: var(--ink);
+}
+.feed-list .row:first-child { border-top: none; }
+.row:hover { background: var(--paper); }
+.row.d-APPROVE     { border-left-color: var(--approve); }
+.row.d-OTP_CONFIRM { border-left-color: var(--ask); }
+.row.d-BLOCK       { border-left-color: var(--block); }
+
+.row-top { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.chip {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 3px 7px;
+  border-radius: 2px;
+}
+.chip.d-APPROVE     { color: var(--approve); background: var(--approve-wash); }
+.chip.d-OTP_CONFIRM { color: var(--ask);     background: var(--ask-wash); }
+.chip.d-BLOCK       { color: var(--block);   background: var(--block-wash); }
+.chip.flag { color: var(--muted); background: var(--paper); border: 1px solid var(--rule); }
+
+.row-amount { font-family: var(--mono); font-size: 15px; font-weight: 600; }
+.row-route { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.row-because { margin-top: 6px; font-size: 14px; color: var(--ink); max-width: 74ch; }
+.row-meta { margin-top: 5px; font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+
+.empty { padding: 34px 18px; color: var(--faint); text-align: center; font-size: 13.5px; }
+
+/* ---------------------------------------------------------------- summary */
+.summary { margin-top: 22px; display: grid; grid-template-columns: minmax(0,1fr) 300px; gap: 22px; }
+@media (max-width: 940px) { .summary { grid-template-columns: 1fr; } }
+.chart-wrap { padding: 16px 18px 20px; height: 232px; }
+.tallies { padding: 16px 18px; }
+.tally { display: flex; justify-content: space-between; align-items: baseline;
+         padding: 9px 0; border-bottom: 1px solid var(--rule); }
+.tally:last-child { border-bottom: none; }
+.tally .n { font-family: var(--mono); font-size: 17px; font-weight: 600; }
+.tally .k { font-size: 13px; color: var(--muted); }
+.note { padding: 0 18px 16px; color: var(--faint); font-size: 11.5px; line-height: 1.5; }
+
+/* ------------------------------------------------------------------ modal */
+.scrim {
+  position: fixed; inset: 0;
+  background: rgba(20, 24, 29, 0.55);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 50;
+}
+.scrim.show { display: flex; }
+.modal {
+  background: var(--card);
+  border-radius: 4px;
+  max-width: 460px;
+  width: 100%;
+  border-top: 6px solid var(--ask);
+  padding: 24px 26px 22px;
+}
+.modal h3 { margin: 8px 0 0; font-size: 21px; font-weight: 800; letter-spacing: -0.025em; }
+.modal .q { margin: 12px 0 0; font-size: 16px; line-height: 1.45; }
+.modal .code {
+  margin: 16px 0 0; padding: 12px;
+  background: var(--paper); border-radius: 3px;
+  font-family: var(--mono); text-align: center;
+  font-size: 26px; letter-spacing: 0.28em; font-weight: 600;
+}
+.modal .timer { margin-top: 10px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); text-align: center; }
+.modal-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
+.modal-actions button {
+  padding: 11px; border: none; border-radius: 2px; cursor: pointer;
+  font-family: var(--display); font-size: 14px; font-weight: 650;
+}
+.btn-yes { background: var(--approve); color: #fff; }
+.btn-no  { background: var(--block); color: #fff; }
+.modal .fineprint { margin-top: 14px; font-size: 11.5px; color: var(--faint); line-height: 1.5; }
+
+/* ---------------------------------------------------------------- drawer */
+.drawer-body { padding: 16px 18px 18px; }
+.drawer-body .narr { font-size: 14.5px; line-height: 1.55; }
+.drawer-body ul { margin: 10px 0 0; padding-left: 18px; font-size: 13.5px; color: var(--muted); }
+.drawer-body li { margin-bottom: 4px; }
+.source-tag {
+  display: inline-block; margin-top: 12px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+  padding: 3px 7px; border: 1px solid var(--rule); border-radius: 2px; color: var(--muted);
+}
+
+/* ------------------------------------------------------------------ motion */
+@keyframes stamp {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.stamp-in { animation: stamp 260ms cubic-bezier(.2,.7,.3,1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .stamp-in { animation: none; }
+  * { transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="masthead">
+  <h1>Fraud Desk</h1>
+  <div class="tagline">Every payment decided automatically, in about 30&nbsp;ms. No human reviewer.</div>
+  <div class="health">
+    <span><i class="dot" id="dot-backend"></i>backend</span>
+    <span><i class="dot" id="dot-ml"></i>ml service</span>
+    <span><i class="dot" id="dot-genai"></i>ollama</span>
+  </div>
+</div>
+
+<main>
+
+  <!-- ===================== THE VERDICT SLAB (signature) ===================== -->
+  <section class="verdict" id="verdict">
+    <div class="thesis">
+      <span class="label">The idea</span>
+      <h2>A decision and a reason, every time.</h2>
+      <p>Send a payment on the left, or fire one of the test scenarios. The
+         decision lands here with the reason it was made — written for the
+         customer, not for a data scientist.</p>
+      <div class="outcomes">
+        <span class="outcome"><i class="swatch" style="background:var(--approve)"></i> Approve — low score, nothing objected</span>
+        <span class="outcome"><i class="swatch" style="background:var(--ask)"></i> Ask the customer — uncertain, or the models disagreed</span>
+        <span class="outcome"><i class="swatch" style="background:var(--block)"></i> Block — high score, or a hard rule fired</span>
+      </div>
+    </div>
+  </section>
+
+  <div class="desk">
+
+    <!-- ============================ COMPOSE ============================ -->
+    <div>
+      <section class="panel">
+        <header><span class="label">Send</span><h2>New payment</h2></header>
+        <form id="payment-form">
+          <div class="field">
+            <span class="label">Amount (Rs)</span>
+            <input type="number" id="amount" value="2500" step="0.01" min="0" required>
+          </div>
+          <div class="pair">
+            <div class="field">
+              <span class="label">From account</span>
+              <input type="text" id="nameOrig" value="C1001" required>
+            </div>
+            <div class="field">
+              <span class="label">To account</span>
+              <input type="text" id="nameDest" value="M-GROCER" required>
+            </div>
+          </div>
+          <div class="pair">
+            <div class="field">
+              <span class="label">Type</span>
+              <select id="type">
+                <option>PAYMENT</option><option>TRANSFER</option>
+                <option>CASH_OUT</option><option>CASH_IN</option><option>DEBIT</option>
+              </select>
+            </div>
+            <div class="field">
+              <span class="label">City</span>
+              <select id="city"></select>
+            </div>
+          </div>
+          <div class="pair">
+            <div class="field">
+              <span class="label">Sender balance before</span>
+              <input type="number" id="oldbalanceOrg" value="50000" step="0.01" min="0">
+            </div>
+            <div class="field">
+              <span class="label">Receiver balance before</span>
+              <input type="number" id="oldbalanceDest" value="10000" step="0.01" min="0">
+            </div>
+          </div>
+          <div class="check">
+            <input type="checkbox" id="trustedDevice">
+            <label for="trustedDevice">Known device
+              <span class="hint">Proves who is paying, not whether they meant to</span>
+            </label>
+          </div>
+          <div class="travel-warn" id="travel-warn"></div>
+          <button type="submit" class="send" id="send-btn">Send payment</button>
+        </form>
+      </section>
+
+      <section class="panel" style="margin-top:22px">
+        <header><span class="label">Phase 8</span><h2>Test scenarios</h2></header>
+        <div class="scenarios" id="scenarios"></div>
+      </section>
+    </div>
+
+    <!-- ============================== FEED ============================== -->
+    <section class="panel">
+      <header>
+        <span class="label">Live</span>
+        <h2>Decision feed</h2>
+      </header>
+      <div class="feed-list" id="feed">
+        <div class="empty">Nothing yet. Send a payment to see a decision.</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============================= SUMMARY ============================= -->
+  <div class="summary">
+    <section class="panel">
+      <header><span class="label">Summary</span><h2>Where payments ended up</h2></header>
+      <div class="chart-wrap"><canvas id="chart"></canvas></div>
+    </section>
+    <section class="panel">
+      <header><span class="label">Counts</span><h2>Totals</h2></header>
+      <div class="tallies" id="tallies"></div>
+      <p class="note" id="threshold-note"></p>
+    </section>
+  </div>
+</main>
+
+<!-- =============================== OTP MODAL =============================== -->
+<div class="scrim" id="otp-scrim">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="otp-title">
+    <span class="label">One-time passcode</span>
+    <h3 id="otp-title">Did you make this payment?</h3>
+    <p class="q" id="otp-question"></p>
+    <div class="code" id="otp-code"></div>
+    <div class="timer" id="otp-timer"></div>
+    <div class="modal-actions">
+      <button class="btn-yes" id="otp-yes">Yes, that was me</button>
+      <button class="btn-no"  id="otp-no">No, it wasn't</button>
+    </div>
+    <p class="fineprint">Simulated for the demo — no SMS is sent. If nobody
+       answers before the deadline the payment is <b>blocked</b>: silence is
+       never treated as consent.</p>
+  </div>
+</div>
+
+<!-- ============================ EXPLANATION DRAWER ========================= -->
+<div class="scrim" id="exp-scrim">
+  <div class="modal" style="max-width:620px;border-top-color:var(--ink)">
+    <span class="label">Why this decision</span>
+    <h3 id="exp-title">Explanation</h3>
+    <div class="drawer-body" style="padding:14px 0 0">
+      <p class="narr" id="exp-text">Loading…</p>
+      <ul id="exp-reasons"></ul>
+      <span class="source-tag" id="exp-source"></span>
+    </div>
+    <div class="modal-actions" style="grid-template-columns:1fr">
+      <button class="btn-yes" style="background:var(--ink)" id="exp-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================================
+   Fraud Desk - dashboard logic
+   ========================================================================== */
+
+const API = '/api';
+
+const CITIES = [
+  { name: 'Mumbai',     lat: 19.0760, lon: 72.8777 },
+  { name: 'Delhi',      lat: 28.7041, lon: 77.1025 },
+  { name: 'Bengaluru',  lat: 12.9716, lon: 77.5946 },
+  { name: 'Hyderabad',  lat: 17.3850, lon: 78.4867 },
+  { name: 'Chennai',    lat: 13.0827, lon: 80.2707 },
+  { name: 'Kolkata',    lat: 22.5726, lon: 88.3639 },
+  { name: 'Vijayawada', lat: 16.5062, lon: 80.6480 },
+  { name: 'Pune',       lat: 18.5204, lon: 73.8567 }
+];
+const MAX_SPEED_KMPH = 900;
+
+const money = n => 'Rs ' + Number(n || 0).toLocaleString('en-IN',
+  { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const el = id => document.getElementById(id);
+
+/* -------------------------------------------------------------- travel ---- */
+/* The impossible-travel check, mirrored client-side purely as a PREVIEW so the
+   demo can show the journey before sending. Enforcement happens on the server
+   (rules.py) - a check that only runs in the browser is not a check at all,
+   because anything can post straight to the API. */
+const lastSeen = {};   // account -> { city, at }
+
+function haversineKm(a, b) {
+  const R = 6371, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
+  const s = Math.sin(dLat / 2) ** 2 +
+            Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+function previewTravel() {
+  const warn = el('travel-warn');
+  const account = el('nameOrig').value.trim();
+  const city = CITIES.find(c => c.name === el('city').value);
+  const previous = lastSeen[account];
+  if (!previous || !city || previous.city.name === city.name) {
+    warn.classList.remove('show');
+    return;
+  }
+  const km = haversineKm(previous.city, city);
+  const hours = Math.max((Date.now() - previous.at) / 3600000, 0.25);
+  const kmph = km / hours;
+  if (kmph > MAX_SPEED_KMPH) {
+    warn.textContent = `${previous.city.name} to ${city.name} is ${Math.round(km).toLocaleString('en-IN')} km. `
+      + `At ${hours.toFixed(2)} h apart that implies ${Math.round(kmph).toLocaleString('en-IN')} km/h — `
+      + `physically impossible, so the server will block this.`;
+    warn.classList.add('show');
+  } else {
+    warn.classList.remove('show');
+  }
+}
+
+/* -------------------------------------------------------------- verdict --- */
+const CLASS_FOR = { APPROVE: 'is-approve', OTP_CONFIRM: 'is-ask', BLOCK: 'is-block' };
+const WORD_FOR  = { APPROVE: 'Approved', OTP_CONFIRM: 'Asking the customer', BLOCK: 'Blocked' };
+
+function renderVerdict(result) {
+  const slab = el('verdict');
+  const decision = result.decision;
+
+  const trace = [];
+  trace.push({ text: `model ${(result.fraudScore ?? 0).toFixed(3)}`, fired: true });
+  if (result.modelsDisagree) trace.push({ text: 'models disagreed', fired: true });
+  if (result.ruleApplied) trace.push({ text: 'rule: ' + result.ruleApplied, fired: true });
+  if (result.quickSignalApplied) trace.push({ text: 'signal: ' + result.quickSignalApplied, fired: true });
+  if (result.otp) trace.push({ text: 'otp sent', fired: true });
+  if (result.degradedMode) trace.push({ text: 'degraded mode', fired: true });
+
+  slab.className = 'verdict stamp-in ' + CLASS_FOR[decision];
+  slab.innerHTML = `
+    <span class="label">${result.degradedMode ? 'Decided without the model' : 'Decided automatically'}</span>
+    <p class="verdict-word">${WORD_FOR[decision]}</p>
+    <p class="verdict-because">${escapeHtml(result.explanation || '')}</p>
+    <div class="trace">${trace.map(t =>
+        `<span class="trace-step ${t.fired ? 'fired' : ''}">${escapeHtml(t.text)}</span>`).join('')}</div>
+    <div class="verdict-meta">
+      <span>amount <b>${money(result._amount)}</b></span>
+      <span>${escapeHtml(result._from)} &rarr; ${escapeHtml(result._to)}</span>
+      <span>score <b>${(result.fraudScore ?? 0).toFixed(4)}</b></span>
+      <span>decided in <b>${result.processingMillis ?? '?'} ms</b></span>
+    </div>`;
+  slab.offsetWidth;   // restart the animation
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/* ----------------------------------------------------------------- feed --- */
+async function refreshFeed() {
+  const rows = await fetch(`${API}/transactions?limit=40`).then(r => r.json());
+  const feed = el('feed');
+  if (!rows.length) {
+    feed.innerHTML = '<div class="empty">Nothing yet. Send a payment to see a decision.</div>';
+    return;
+  }
+  feed.innerHTML = rows.map(t => {
+    let reasons = [];
+    try { reasons = JSON.parse(t.reasonsJson || '[]'); } catch (e) { /* ignore */ }
+    const flags = [];
+    if (t.modelsDisagree) flags.push('models disagreed');
+    if (t.ruleApplied) flags.push('rule: ' + t.ruleApplied);
+    if (t.quickSignalApplied) flags.push(t.quickSignalApplied);
+    if (t.degradedMode) flags.push('degraded');
+    return `
+      <button class="row d-${t.finalDecision}" data-id="${t.id}">
+        <div class="row-top">
+          <span class="chip d-${t.finalDecision}">${t.finalDecision.replace('_', ' ')}</span>
+          <span class="row-amount">${money(t.amount)}</span>
+          <span class="row-route">${escapeHtml(t.nameOrig)} &rarr; ${escapeHtml(t.nameDest)}</span>
+          ${flags.map(f => `<span class="chip flag">${escapeHtml(f)}</span>`).join('')}
+        </div>
+        <div class="row-because">${escapeHtml(t.explanation || reasons[0] || 'No reason recorded.')}</div>
+        <div class="row-meta">score ${(t.fraudScore ?? 0).toFixed(4)} ·
+          ${t.type} · ${t.processingMillis ?? '?'} ms · tap for the full explanation</div>
+      </button>`;
+  }).join('');
+
+  feed.querySelectorAll('.row').forEach(row =>
+    row.addEventListener('click', () => openExplanation(row.dataset.id)));
+}
+
+/* ---------------------------------------------------------------- chart --- */
+let chart;
+const CHART_COLORS = ['#0F7A52', '#5A3FD6', '#BE2B22'];
+
+function initChart() {
+  /* Horizontal bars, not a donut. Three categories compared by count is a
+     magnitude question, and length on a common baseline is read far more
+     accurately than angle. Direct value labels, no legend - the category axis
+     already names each bar, so a legend would repeat itself. */
+  chart = new Chart(el('chart'), {
+    type: 'bar',
+    data: {
+      labels: ['Approved', 'Asked the customer', 'Blocked'],
+      datasets: [{
+        data: [0, 0, 0],
+        backgroundColor: CHART_COLORS,
+        borderRadius: 4,
+        borderSkipped: false,
+        barThickness: 26
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#14181D', padding: 10, cornerRadius: 3,
+          titleFont: { size: 12 }, bodyFont: { size: 12 },
+          callbacks: { label: c => `${c.parsed.x} payment${c.parsed.x === 1 ? '' : 's'}` }
+        }
+      },
+      scales: {
+        x: {
+          beginAtZero: true, grid: { color: '#EEF1F0' },
+          border: { display: false },
+          ticks: { precision: 0, color: '#97A0A6', font: { size: 11 } }
+        },
+        y: {
+          grid: { display: false }, border: { color: '#D6DCDA' },
+          ticks: { color: '#667079', font: { size: 12 } }
+        }
+      }
+    }
+  });
+}
+
+async function refreshStats() {
+  const s = await fetch(`${API}/stats`).then(r => r.json());
+  chart.data.datasets[0].data = [s.approved, s.otpConfirm, s.blocked];
+  chart.update();
+
+  el('tallies').innerHTML = [
+    ['Approved', s.approved, 'var(--approve)'],
+    ['Asked the customer', s.otpConfirm, 'var(--ask)'],
+    ['Blocked', s.blocked, 'var(--block)'],
+    ['Total', s.total, 'var(--ink)'],
+    ['Human reviewers', s.humanReviewers, 'var(--ink)']
+  ].map(([k, n, c]) =>
+    `<div class="tally"><span class="k">${k}</span><span class="n" style="color:${c}">${n}</span></div>`
+  ).join('');
+
+  el('threshold-note').textContent =
+    `Approve below ${s.approveBelow}, block above ${s.blockAbove}. `
+    + `Anything between, or where the two models disagree, goes to the customer. `
+    + `Thresholds come from config.yaml, which the Python service reads too.`;
+}
+
+/* ------------------------------------------------------------------ otp --- */
+let otpTimer = null;
+
+function openOtp(result) {
+  el('otp-question').textContent = result.otp.question;
+  el('otp-code').textContent = result.otp.code;
+  el('otp-scrim').classList.add('show');
+  el('otp-yes').focus();
+
+  let left = result.otp.timeoutSeconds || 60;
+  const tick = () => {
+    el('otp-timer').textContent = left > 0
+      ? `${left}s left — no answer blocks the payment`
+      : 'Deadline passed — the payment will be blocked';
+    left--;
+    if (left < -2) clearInterval(otpTimer);
+  };
+  tick();
+  clearInterval(otpTimer);
+  otpTimer = setInterval(tick, 1000);
+
+  const answer = async confirmed => {
+    clearInterval(otpTimer);
+    el('otp-scrim').classList.remove('show');
+    const res = await fetch(`${API}/transactions/${result.id}/otp?confirmed=${confirmed}`,
+                            { method: 'POST' }).then(r => r.json());
+    renderVerdict({
+      ...result,
+      decision: res.decision,
+      explanation: res.explanation,
+      otp: null,
+      quickSignalApplied: null,
+      ruleApplied: confirmed ? null : result.ruleApplied
+    });
+    await Promise.all([refreshFeed(), refreshStats()]);
+  };
+  el('otp-yes').onclick = () => answer(true);
+  el('otp-no').onclick  = () => answer(false);
+}
+
+/* ---------------------------------------------------------- explanation --- */
+async function openExplanation(id) {
+  el('exp-scrim').classList.add('show');
+  el('exp-text').textContent = 'Loading the plain-language explanation…';
+  el('exp-reasons').innerHTML = '';
+  el('exp-source').textContent = '';
+  el('exp-close').focus();
+
+  try {
+    const data = await fetch(`${API}/transactions/${id}/explanation`).then(r => r.json());
+    el('exp-text').textContent = data.explanation || 'No explanation available.';
+    const reasons = (data.shap_reasons || []).map(r => r.reason || r);
+    el('exp-reasons').innerHTML = reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('');
+    /* Say plainly whether a language model wrote this or the template did.
+       Presenting a fallback sentence as model prose would be dishonest. */
+    const src = data.source === 'ollama' ? 'written by llama3.2, grounded in past cases'
+              : data.source === 'degraded' ? 'no model explanation available'
+              : 'built from the model\'s own reasons — no language model involved';
+    el('exp-source').textContent = src;
+  } catch (e) {
+    el('exp-text').textContent = 'The explanation service could not be reached. '
+      + 'The decision itself is unaffected — it was already made.';
+  }
+}
+el('exp-close').onclick = () => el('exp-scrim').classList.remove('show');
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    el('exp-scrim').classList.remove('show');
+  }
+});
+
+/* --------------------------------------------------------------- submit --- */
+async function send(payload) {
+  const btn = el('send-btn');
+  btn.disabled = true;
+  btn.textContent = 'Deciding…';
+  try {
+    const res = await fetch(`${API}/transactions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const result = await res.json();
+    if (!res.ok) {
+      alert('Rejected: ' + JSON.stringify(result.details || result.error));
+      return null;
+    }
+    result._amount = payload.amount;
+    result._from = payload.nameOrig;
+    result._to = payload.nameDest;
+
+    if (payload.location) {
+      const city = CITIES.find(c => c.name === payload.location);
+      if (city) lastSeen[payload.nameOrig] = { city, at: Date.now() };
+    }
+
+    renderVerdict(result);
+    await Promise.all([refreshFeed(), refreshStats()]);
+    if (result.otp) openOtp(result);
+    return result;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Send payment';
+  }
+}
+
+function formPayload() {
+  const amount = parseFloat(el('amount').value);
+  const oldOrg = parseFloat(el('oldbalanceOrg').value);
+  const oldDest = parseFloat(el('oldbalanceDest').value);
+  const city = CITIES.find(c => c.name === el('city').value);
+  return {
+    type: el('type').value,
+    amount,
+    nameOrig: el('nameOrig').value.trim(),
+    nameDest: el('nameDest').value.trim(),
+    oldbalanceOrg: oldOrg,
+    newbalanceOrig: Math.max(oldOrg - amount, 0),
+    oldbalanceDest: oldDest,
+    newbalanceDest: oldDest + amount,
+    trustedDevice: el('trustedDevice').checked,
+    location: city.name,
+    locationLat: city.lat,
+    locationLon: city.lon
+  };
+}
+
+el('payment-form').addEventListener('submit', e => {
+  e.preventDefault();
+  send(formPayload());
+});
+
+/* ------------------------------------------------------------ scenarios --- */
+/* One click per Phase 8 test case. Some are sequences, because the pattern
+   only exists across several payments - a burst is not visible in one row. */
+const SCENARIOS = [
+  { id: 'R1', title: 'Huge amount, account emptied', expect: 'expect BLOCK',
+    steps: [{ type: 'TRANSFER', amount: 3244067.13, nameOrig: 'C-R1', nameDest: 'C-R1DEST',
+              oldbalanceOrg: 3244067.13, oldbalanceDest: 0 }] },
+  { id: 'R2', title: 'Impossible travel', expect: 'Mumbai then Kolkata — expect BLOCK',
+    steps: [{ type: 'PAYMENT', amount: 2000, nameOrig: 'C-R2', nameDest: 'M-R2A',
+              oldbalanceOrg: 60000, oldbalanceDest: 8000, city: 'Mumbai' },
+            { type: 'PAYMENT', amount: 2500, nameOrig: 'C-R2', nameDest: 'M-R2B',
+              oldbalanceOrg: 58000, oldbalanceDest: 9000, city: 'Kolkata' }] },
+  { id: 'R3', title: 'Far above this receiver\'s normal', expect: 'expect a flag',
+    steps: [{ type: 'TRANSFER', amount: 900000, nameOrig: 'C-R3', nameDest: 'C-R3DEST',
+              oldbalanceOrg: 1200000, oldbalanceDest: 0 }] },
+  { id: 'R5', title: 'Unfamiliar shape', expect: 'the anomaly detector\'s job',
+    steps: [{ type: 'CASH_OUT', amount: 1750000, nameOrig: 'C-R5', nameDest: 'C-R5DEST',
+              oldbalanceOrg: 1750000, oldbalanceDest: 0 }] },
+  { id: 'R6', title: 'Unusual but genuine, known device', expect: 'expect ASK, not block',
+    steps: [{ type: 'TRANSFER', amount: 480000, nameOrig: 'C-R6', nameDest: 'C-R6PAYEE',
+              oldbalanceOrg: 1000000, oldbalanceDest: 0, trusted: true }] },
+  { id: 'R7', title: 'Rapid transfers from one account', expect: '5 in a row — expect BLOCK',
+    steps: Array.from({ length: 5 }, (_, i) => ({
+      type: 'TRANSFER', amount: 40000, nameOrig: 'C-R7', nameDest: 'C-R7D' + i,
+      oldbalanceOrg: 200000 - i * 40000, oldbalanceDest: 5000 })) }
+];
+
+function renderScenarios() {
+  el('scenarios').innerHTML = SCENARIOS.map(s => `
+    <button class="scenario" data-id="${s.id}">
+      <span class="tag">${s.id}</span>
+      <span>${escapeHtml(s.title)}<span class="expect">${escapeHtml(s.expect)}</span></span>
+    </button>`).join('');
+
+  el('scenarios').querySelectorAll('.scenario').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const scenario = SCENARIOS.find(s => s.id === btn.dataset.id);
+      const suffix = '-' + Date.now().toString().slice(-5);   // fresh accounts each run
+      for (const step of scenario.steps) {
+        const city = CITIES.find(c => c.name === (step.city || 'Mumbai'));
+        await send({
+          type: step.type,
+          amount: step.amount,
+          nameOrig: step.nameOrig + suffix,
+          nameDest: step.nameDest + suffix,
+          oldbalanceOrg: step.oldbalanceOrg,
+          newbalanceOrig: Math.max(step.oldbalanceOrg - step.amount, 0),
+          oldbalanceDest: step.oldbalanceDest,
+          newbalanceDest: step.oldbalanceDest + step.amount,
+          trustedDevice: !!step.trusted,
+          location: city.name,
+          locationLat: city.lat,
+          locationLon: city.lon
+        });
+        await new Promise(r => setTimeout(r, 260));
+      }
+    });
+  });
+}
+
+/* ----------------------------------------------------------------- boot --- */
+async function refreshHealth() {
+  try {
+    const h = await fetch(`${API}/health`).then(r => r.json());
+    el('dot-backend').className = 'dot up';
+    el('dot-ml').className = 'dot ' + (h.mlService === 'ok' ? 'up' : 'down');
+  } catch (e) {
+    el('dot-backend').className = 'dot down';
+    el('dot-ml').className = 'dot down';
+  }
+  try {
+    const m = await fetch('http://localhost:5001/health').then(r => r.json());
+    el('dot-genai').className = 'dot ' + (m.genai && m.genai.available ? 'up' : 'down');
+  } catch (e) {
+    el('dot-genai').className = 'dot down';
+  }
+}
+
+function initCities() {
+  el('city').innerHTML = CITIES.map(c => `<option>${c.name}</option>`).join('');
+  el('city').addEventListener('change', previewTravel);
+  el('nameOrig').addEventListener('input', previewTravel);
+}
+
+initCities();
+renderScenarios();
+initChart();
+refreshHealth();
+refreshFeed();
+refreshStats();
+setInterval(refreshHealth, 15000);
+</script>
+</body>
+</html>

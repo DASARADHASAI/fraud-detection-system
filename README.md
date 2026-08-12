@@ -39,7 +39,7 @@ step-up (OTP) path rather than being silently approved or blocked.
 - [x] **Phase 4** — GenAI agent, optional (`ml-service/genai_agent.py`)
 - [x] **Phase 5** — Flask API on port 5001 (`ml-service/app.py`)
 - [x] **Phase 6** — Spring Boot backend + automatic routing (`backend/`)
-- [ ] Phase 7 — Dashboard
+- [x] **Phase 7** — Dashboard (`backend/src/main/resources/static/index.html`)
 - [ ] Phase 8 — Testing
 
 ## Running the ML service

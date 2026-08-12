@@ -81,6 +81,19 @@ public class Transaction {
      */
     private Boolean degradedMode = false;
 
+    /**
+     * The one-sentence explanation shown to the customer, already matched to the
+     * decision that was taken.
+     *
+     * <p>Persisted rather than rebuilt in the browser. The dashboard's feed used
+     * to render reasonsJson[0], which is the strongest RISK factor - so an
+     * approved payment was captioned "this is a TRANSFER or CASH_OUT, the only
+     * two types where fraud occurs". Storing the sentence keeps the feed and the
+     * verdict panel saying the same thing.
+     */
+    @Column(length = 1000)
+    private String explanation;
+
     /** Human-readable reasons, stored as JSON so the dashboard can list them. */
     @Lob
     @Column(length = 4000)
@@ -163,6 +176,9 @@ public class Transaction {
 
     public Boolean getDegradedMode() { return degradedMode; }
     public void setDegradedMode(Boolean v) { this.degradedMode = v; }
+
+    public String getExplanation() { return explanation; }
+    public void setExplanation(String v) { this.explanation = v; }
 
     public String getReasonsJson() { return reasonsJson; }
     public void setReasonsJson(String v) { this.reasonsJson = v; }
