@@ -6,7 +6,7 @@
     "either_caught": 819,
     "rescued_by_isolation_forest": 32
   },
-  "trained_at": "2026-08-11T14:53:07",
+  "trained_at": "2026-08-12T11:03:25",
   "random_state": 42,
   "feature_columns": [
     "amount",

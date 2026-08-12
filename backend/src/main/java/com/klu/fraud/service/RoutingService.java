@@ -93,6 +93,11 @@ public class RoutingService {
         txn.setRuleApplied(prediction.getRuleApplied());
 
         List<String> reasons = new ArrayList<>(prediction.getReasons());
+        // A rule that fired is the headline, not a footnote: put its wording
+        // first so firstReason() picks it up.
+        if (prediction.getRuleMessage() != null) {
+            reasons.add(0, prediction.getRuleMessage());
+        }
 
         Decision modelDecision = parse(prediction.getModelDecision());
         Decision current = parse(prediction.getDecision());
@@ -203,8 +208,8 @@ public class RoutingService {
                 config.getRapidSenderWindowSteps(), ChronoUnit.HOURS);
         long sent = transactions.countSentSince(txn.getNameOrig(), senderSince, txn.getId());
         if (sent > config.getRapidSenderMaxAllowed()) {
-            reasons.add("this account has made " + sent + " payments in the last "
-                    + config.getRapidSenderWindowSteps() + " hour(s)");
+            reasons.add(0, "this account has made " + sent + " payments in the last "
+                    + config.getRapidSenderWindowSteps() + " hour(s), far more than usual");
             txn.setRuleApplied("rapid_sender_transfers");
             reviewLog.save(new ReviewLog(txn.getId(), "RULE_OVERRIDE", "BLOCK",
                     "rapid_sender_transfers: " + sent + " payments sent within "
@@ -220,9 +225,9 @@ public class RoutingService {
         long received = transactions.countReceivedSince(
                 txn.getNameDest(), receiverSince, txn.getId());
         if (received > config.getRapidReceiverMaxAllowed()) {
-            reasons.add("the receiving account has taken in " + received
+            reasons.add(0, "the receiving account has taken in " + received
                     + " payments in the last " + config.getRapidReceiverWindowSteps()
-                    + " hour(s)");
+                    + " hour(s) from different people");
             if (txn.getRuleApplied() == null) {
                 txn.setRuleApplied("rapid_receiver_collection");
             }

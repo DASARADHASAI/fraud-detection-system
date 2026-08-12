@@ -97,6 +97,16 @@ public class MlServiceClient {
             result.setModelDecision(str(response.getOrDefault("model_decision",
                     response.getOrDefault("decision", "OTP_CONFIRM"))));
             result.setRuleApplied(str(response.get("rule_applied")));
+            // rules.py writes a customer_message per triggered rule; use it so a
+            // rule-driven decision is explained by the rule, not by a model feature.
+            Object triggered = response.get("rules_triggered");
+            if (triggered instanceof List<?> list && !list.isEmpty()
+                    && list.get(0) instanceof Map<?, ?> first) {
+                Object message = first.get("customer_message");
+                if (message != null) {
+                    result.setRuleMessage(String.valueOf(message));
+                }
+            }
 
             List<String> reasons = extractReasons(response.get("shap_reasons"));
             result.setReasons(reasons);

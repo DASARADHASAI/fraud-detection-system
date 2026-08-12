@@ -19,6 +19,13 @@ public class PredictionResult {
     private String decision = "OTP_CONFIRM";
     private String modelDecision = "OTP_CONFIRM";
     private String ruleApplied;
+    /**
+     * The customer-facing sentence for the rule that fired, written in
+     * rules.py. Needed because a rule-driven block must be explained by what
+     * the RULE found - quoting a model feature instead would describe a
+     * decision the model did not make.
+     */
+    private String ruleMessage;
     private List<String> reasons = new ArrayList<>();
     /**
      * Why the model was RELAXED about this payment. Needed because an approval
@@ -46,6 +53,9 @@ public class PredictionResult {
 
     public String getRuleApplied() { return ruleApplied; }
     public void setRuleApplied(String v) { this.ruleApplied = v; }
+
+    public String getRuleMessage() { return ruleMessage; }
+    public void setRuleMessage(String v) { this.ruleMessage = v; }
 
     public List<String> getReasons() { return reasons; }
     public void setReasons(List<String> v) { this.reasons = v; }

@@ -40,7 +40,7 @@ step-up (OTP) path rather than being silently approved or blocked.
 - [x] **Phase 5** — Flask API on port 5001 (`ml-service/app.py`)
 - [x] **Phase 6** — Spring Boot backend + automatic routing (`backend/`)
 - [x] **Phase 7** — Dashboard (`backend/src/main/resources/static/index.html`)
-- [ ] Phase 8 — Testing
+- [x] **Phase 8** — Acceptance tests (`docs/acceptance-tests.md`)
 
 ## Running the ML service
 
@@ -94,7 +94,13 @@ rises only from 28 ms to 111 ms.
 ./venv/bin/python test_explain.py     # 13 checks — SHAP correctness
 ./venv/bin/python test_genai.py       # 36 checks — GenAI guards and fallbacks
 ./venv/bin/python test_api.py         # 44 checks — features, validation, HTTP
+./venv/bin/python test_backend.py     # 33 checks — the Java backend over HTTP
+./venv/bin/python acceptance_tests.py # 7 end-to-end cases (R0–R7)
 ```
+
+The last one needs **both** services running. It posts payments exactly as the
+dashboard does and writes [docs/acceptance-tests.md](docs/acceptance-tests.md)
+from the real run — the document is generated, so it cannot drift from the code.
 
 ---
 
