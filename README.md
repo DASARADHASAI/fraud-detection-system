@@ -38,7 +38,7 @@ step-up (OTP) path rather than being silently approved or blocked.
 - [x] **Phase 3** — SHAP explainability (`ml-service/explain.py`)
 - [x] **Phase 4** — GenAI agent, optional (`ml-service/genai_agent.py`)
 - [x] **Phase 5** — Flask API on port 5001 (`ml-service/app.py`)
-- [ ] Phase 6 — Spring Boot backend + automatic routing
+- [x] **Phase 6** — Spring Boot backend + automatic routing (`backend/`)
 - [ ] Phase 7 — Dashboard
 - [ ] Phase 8 — Testing
 
@@ -177,15 +177,19 @@ velocity are inert on this dataset no matter how you sample — the columns come
 out constant, and `amount_deviation` collapses into a rescaled copy of `amount`.
 
 So the model's behavioural features are built on the **receiver** side, where
-history is real. This is arguably the better signal anyway: a "mule" account
-whose incoming amounts suddenly jump is a classic fraud pattern. The separation
-is clear in the engineered data:
+history is real. What they genuinely contribute is **amount**-based, not
+activity-based — the separation is clear:
 
 | feature | legitimate | fraud |
 |---|---|---|
 | `dest_amount_ratio` | 0.885 | **8.201** |
 | `dest_amount_deviation` | 0.089 | **2.979** |
 | `is_new_receiver` | 0.427 | 0.630 |
+
+Do **not** claim the model detects mule accounts collecting rapid transfers.
+We measured it: fraud receivers are *less* busy than legitimate ones (0.036 vs
+0.189 prior payments per hour). That typology is real in banking and absent
+from PaySim, so it is handled by the **rule layer**, not the model — see below.
 
 The sender-side profile is still computed — in the live system a real customer
 *does* have history — but it is kept out of the trained model. Feeding it in
