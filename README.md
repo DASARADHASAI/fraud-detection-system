@@ -225,3 +225,76 @@ full-file pass still runs, only the output gets smaller.
 - **The scaler is fitted on training data only**, for the same reason.
 - **No paid APIs.** The GenAI layer is local Ollama, and falls back to a plain
   template sentence if Ollama is not running. The core system works without it.
+
+## Running the Spring Boot backend
+
+```bash
+cd "/Users/lucky/Documents/fraud detection system/backend"
+mvn spring-boot:run                 # http://localhost:8080
+```
+
+Start the Python service first — the backend works without it, but in
+**degraded mode** (see below).
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/transactions` | Submit a payment — comes back **already decided** |
+| POST | `/api/transactions/{id}/otp?confirmed=true` | Customer answers the challenge |
+| GET | `/api/transactions` | Recent payments |
+| GET | `/api/alerts` | Everything not simply approved |
+| GET | `/api/transactions/{id}` | One payment plus its full audit trail |
+| GET | `/api/transactions/{id}/explanation` | Plain-language write-up (lazy, ~3.7 s) |
+| POST | `/api/transactions/{id}/feedback?wasFraud=true` | Record the real outcome |
+| GET | `/api/stats` | Dashboard counts |
+| GET | `/api/health` | Both services + the thresholds in force |
+
+Browse the database at `http://localhost:8080/h2-console`
+(JDBC URL `jdbc:h2:file:./data/frauddb`, user `sa`, no password).
+
+### The automatic routing
+
+```
+                         ┌─ score < 0.35, models agree ──────→ APPROVE
+  payment → ML score  ───┼─ score > 0.75 ────────────────────→ BLOCK
+                         └─ in between, OR models disagree ──→ step up:
+                                1. known-fraud receiver?  → BLOCK
+                                2. established payee + known device? → APPROVE
+                                3. otherwise → ask the customer by OTP
+                                     YES → APPROVE
+                                     NO or no reply → BLOCK
+```
+
+**No human reviewer exists anywhere.** The `review_log` table is an audit
+record a bank *could* inspect afterwards, not a queue of work. `/api/stats`
+reports `humanReviewers: 0`.
+
+Three details that are easy to get backwards:
+
+- **Silence is a denial.** An unanswered OTP blocks the payment. The opposite
+  would hand an attacker a free win: pay, stay quiet, wait out the timer.
+- **A trusted device is never enough on its own.** It proves *identity*, not
+  *intent* — see knowledge-base case FRAUD-006, where the victim authorises the
+  payment themselves. It only counts alongside an established payee.
+- **Nothing may soften a decision**, except a customer answering YES to an OTP —
+  the one piece of evidence no other component has.
+
+### When the Python service is down
+
+The backend keeps running. It does **not** approve everything (the bank would be
+unprotected) and does **not** block everything (the bank has DDoSed itself).
+Instead a crude local check errs toward asking the customer, and every such
+decision is flagged `degradedMode: true` all the way to the dashboard. Verified
+with Python killed:
+
+| Payment | Degraded decision |
+|---|---|
+| Small merchant payment | APPROVE |
+| Full-balance transfer to an empty account | BLOCK |
+| Large transfer, balance left over | OTP_CONFIRM |
+
+### Backend tests
+
+```bash
+./venv/bin/python test_backend.py           # 33 checks over HTTP
+./venv/bin/python test_backend.py --slow    # adds the OTP-timeout check
+```

@@ -170,7 +170,7 @@ decision:
   block_above: 0.75               # score > 0.75            -> BLOCK automatically
                                   # anything in between, OR models_disagree
                                   # -> automatic step-up (quick signals, then OTP)
-  otp_timeout_seconds: 60         # No reply in time = treat as denied = BLOCK
+  otp_timeout_seconds: 60        # No reply in time = treat as denied = BLOCK
 
 # ----------------------------------------------------------------------------
 # Services and ports
