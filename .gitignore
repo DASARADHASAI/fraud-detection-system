@@ -32,3 +32,6 @@ backend/target/
 .idea/
 .vscode/
 *.iml
+
+# --- Demo run logs (demo.sh) ---
+.demo-logs/

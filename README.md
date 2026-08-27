@@ -42,6 +42,38 @@ step-up (OTP) path rather than being silently approved or blocked.
 - [x] **Phase 7** — Dashboard (`backend/src/main/resources/static/index.html`)
 - [x] **Phase 8** — Acceptance tests (`docs/acceptance-tests.md`)
 
+## Running it for a demonstration
+
+```bash
+./demo.sh                # cold machine -> demo-ready, then opens the dashboard
+./demo.sh --no-reset     # keep the existing database (mid-session rehearsal)
+./demo.sh --stop         # stop both services
+```
+
+Resets the H2 database, starts both services **polling `/health` until each is
+actually ready** rather than sleeping a fixed duration, warms Ollama so the
+first narration is not slow in front of an audience, and seeds ~15 ordinary
+payments so the feed and chart are not empty.
+
+It never runs `features.py` — that is a ~50 s, ~4.5 GB pass and has no place on
+demo day. If the model files are missing it says so and stops, rather than
+failing halfway through.
+
+The demonstration itself is designed in
+[docs/superpowers/specs/2026-08-28-demonstration-plan-design.md](docs/superpowers/specs/2026-08-28-demonstration-plan-design.md)
+— the arc, the pre-flight checklist, failure fallbacks, and the answers to the
+questions a panel actually asks.
+
+### The clock is a model feature, so the dashboard pins it
+
+`hour_of_day` and `is_night` are real features, so an identical payment scores
+0.2954 at 3am and 0.2206 at 2pm — either side of the 0.35 approve threshold.
+Sending no `step` makes the ML service fall back to wall-clock **UTC** hours, and
+because IST is UTC+5:30 that silently stops R6 raising an OTP challenge after
+11:30 local time. Every scenario button now pins `step`, exactly as
+`acceptance_tests.py` does. The payment form exposes it as a **Clock** dropdown,
+so "what if this were 3am?" is answered on screen in one click.
+
 ## Running the ML service
 
 ```bash
