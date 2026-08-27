@@ -35,3 +35,4 @@ backend/target/
 
 # --- Demo run logs (demo.sh) ---
 .demo-logs/
+demo-video/
