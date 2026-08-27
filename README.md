@@ -42,6 +42,31 @@ step-up (OTP) path rather than being silently approved or blocked.
 - [x] **Phase 7** — Dashboard (`backend/src/main/resources/static/index.html`)
 - [x] **Phase 8** — Acceptance tests (`docs/acceptance-tests.md`)
 
+## Two applications, not one
+
+| | URL | What it is |
+|---|---|---|
+| **UniPay** | `localhost:8080/pay.html` | The **customer's** UPI payment app |
+| **FraudDesk** | `localhost:8080` | The **bank's** fraud console |
+
+The console on its own is a closed loop — you click a button in the bank's screen
+and the bank's screen answers. UniPay is a separate application that holds a
+balance, knows its payees, and calls `POST /api/transactions` at the
+authorisation step exactly as a bank's core system would. It cannot see a score,
+a model or a rule; it learns only what it is allowed to learn — paid, held, or
+declined.
+
+**We simulate the bank. We do not simulate the fraud detection.**
+
+Two deliberate details:
+
+- **A declined customer is never told why.** Telling a fraudster which signal
+  caught them is how they learn to avoid it next time. The full reason sits on
+  the console against the same reference number.
+- **The fraud signals come from the app's own state**, not from hard-coded test
+  payloads. Paying your entire balance to a never-seen UPI ID *is* the
+  account-drain shape; the model is not being fed a scenario.
+
 ## Running it for a demonstration
 
 ```bash

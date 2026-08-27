@@ -138,6 +138,14 @@ body {
   font-family: var(--mono); font-size: 10px; color: var(--grey-2);
   letter-spacing: 0.1em; text-transform: uppercase;
 }
+.customer-link {
+  display: inline-block; margin-top: 14px;
+  font-size: 12px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--grey-2); text-decoration: none;
+  border: 1px solid var(--line-2); border-radius: 999px; padding: 7px 14px;
+  transition: color 180ms, border-color 180ms;
+}
+.customer-link:hover { color: var(--white); border-color: var(--grey-2); }
 .dot {
   width: 6px; height: 6px; border-radius: 50%; display: inline-block;
   margin-right: 6px; background: var(--line-2);
@@ -432,6 +440,7 @@ button.send:hover .arrow { transform: translateX(4px); }
     <span><i class="dot" id="dot-ml"></i>scorer</span>
     <span><i class="dot" id="dot-genai"></i>llm</span>
   </div>
+  <a class="customer-link" href="/pay.html" target="_blank">Customer app &nearr;</a>
 </div>
 
 <main>

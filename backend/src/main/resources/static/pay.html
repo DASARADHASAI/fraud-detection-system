@@ -1,0 +1,779 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UniPay</title>
+<!--
+  UniPay -- the CUSTOMER's side of the demonstration.
+
+  This exists because the fraud console alone is a closed loop: you click a
+  button in the bank's own screen and the bank's own screen answers. Nobody
+  watching can tell whether anything independent happened.
+
+  This page is a separate application. It holds a balance, it knows its payees,
+  and it calls the fraud service the way a bank's core system would -- at the
+  authorisation step, before the money moves. Nothing here can see a score, a
+  model, or a rule. It only learns what it is allowed to learn: paid, held, or
+  declined.
+
+  WE SIMULATE THE BANK. WE DO NOT SIMULATE THE FRAUD DETECTION.
+
+  Deliberately: a declined customer is never told why. Telling a fraudster
+  which signal caught them is how they learn to avoid it next time. The reason
+  exists in full on the bank console, against the same reference number.
+-->
+<style>
+/* ---------------------------------------------------------------------------
+   The bank console is dark, geometric, Space Grotesk. This is its opposite on
+   purpose -- the two must not read as the same product sitting side by side.
+   Humanist system UI for the app; mono ONLY in the demo rail, so that strip
+   reads as instrumentation rather than as part of the product.
+   --------------------------------------------------------------------------- */
+@font-face {
+  font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 400;
+  font-display: swap; src: url('/vendor/fonts/ibm-plex-mono-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 600;
+  font-display: swap; src: url('/vendor/fonts/ibm-plex-mono-latin-600-normal.woff2') format('woff2');
+}
+
+:root {
+  --field:   #EBEEF3;
+  --card:    #FFFFFF;
+  --ink:     #141B4D;
+  --ink-2:   #5A6383;
+  --ink-3:   #8C94AC;
+  --line:    #DDE2EB;
+  --gold:    #FFB020;
+  --gold-d:  #B8720A;
+  --ok:      #0E8A6E;
+  --ok-dim:  #E4F3EF;
+  --held:    #B8720A;
+  --held-dim:#FDF0DC;
+  --no:      #B03A2E;
+  --no-dim:  #FBEAE7;
+
+  --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Helvetica Neue', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--field);
+  color: var(--ink);
+  font-family: var(--ui);
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 28px 20px 60px;
+}
+
+/* --- masthead ------------------------------------------------------------ */
+
+.top {
+  width: 100%; max-width: 860px;
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 26px;
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.mark {
+  width: 30px; height: 30px; border-radius: 9px;
+  background: var(--ink); color: var(--gold);
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 16px; letter-spacing: -.5px;
+}
+.brand b { font-size: 19px; font-weight: 700; letter-spacing: -.4px; }
+.brand b i { font-style: normal; color: var(--gold-d); }
+
+.console-link {
+  font-size: 13px; font-weight: 600; color: var(--ink-2);
+  text-decoration: none; padding: 8px 13px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--card);
+  transition: color .16s, border-color .16s;
+}
+.console-link:hover { color: var(--ink); border-color: var(--ink-3); }
+
+/* --- the two columns ----------------------------------------------------- */
+
+.stage {
+  width: 100%; max-width: 860px;
+  display: grid; grid-template-columns: 372px 1fr; gap: 34px;
+  align-items: start;
+}
+@media (max-width: 800px) {
+  .stage { grid-template-columns: 1fr; justify-items: center; }
+}
+
+/* --- the phone ----------------------------------------------------------- */
+
+.phone {
+  width: 372px; min-height: 648px;
+  background: var(--card);
+  border-radius: 34px;
+  border: 1px solid var(--line);
+  box-shadow: 0 1px 2px rgba(20,27,77,.05), 0 18px 46px -12px rgba(20,27,77,.16);
+  padding: 26px 24px 28px;
+  display: flex; flex-direction: column;
+  position: relative; overflow: hidden;
+}
+
+.screen { display: none; flex: 1; flex-direction: column; }
+.screen.on { display: flex; animation: rise .26s cubic-bezier(.2,.7,.3,1); }
+@keyframes rise { from { opacity: 0; transform: translateY(7px); } }
+
+.back {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: inherit; font-size: 14px; font-weight: 600; color: var(--ink-2);
+  margin-bottom: 20px; align-self: flex-start;
+}
+.back:hover { color: var(--ink); }
+
+/* --- home ---------------------------------------------------------------- */
+
+.bal-label {
+  font-size: 12px; font-weight: 600; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.bal {
+  font-size: 40px; font-weight: 800; letter-spacing: -1.6px;
+  font-variant-numeric: tabular-nums; margin: 6px 0 3px;
+}
+.bal-sub { font-size: 13px; color: var(--ink-2); margin-bottom: 28px; }
+
+.sect {
+  font-size: 12px; font-weight: 600; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--ink-3); margin-bottom: 13px;
+}
+
+.payees { display: flex; flex-direction: column; gap: 7px; margin-bottom: 22px; }
+.payee {
+  display: flex; align-items: center; gap: 13px; width: 100%;
+  padding: 11px 12px; border-radius: 15px;
+  background: none; border: 1px solid transparent; cursor: pointer;
+  font: inherit; text-align: left; color: inherit;
+  transition: background .15s, border-color .15s;
+}
+.payee:hover { background: var(--field); border-color: var(--line); }
+.av {
+  width: 42px; height: 42px; border-radius: 13px; flex: none;
+  display: grid; place-items: center;
+  font-weight: 700; font-size: 14px; letter-spacing: -.3px;
+  background: var(--ink); color: #fff;
+}
+.av.shop { background: var(--gold); color: var(--ink); }
+.payee-n { font-size: 15px; font-weight: 600; }
+.payee-h { font-size: 12.5px; color: var(--ink-3); margin-top: 1px; }
+
+/* --- buttons ------------------------------------------------------------- */
+
+.btn {
+  width: 100%; padding: 16px; border: 0; border-radius: 16px;
+  font: inherit; font-size: 15.5px; font-weight: 700; cursor: pointer;
+  background: var(--ink); color: #fff;
+  transition: transform .12s, opacity .15s;
+}
+.btn:hover { opacity: .9; }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .45; cursor: progress; }
+.btn.ghost { background: var(--field); color: var(--ink); }
+.btn.gold  { background: var(--gold); color: var(--ink); }
+.btn.quiet { background: none; color: var(--ink-2); font-weight: 600; padding: 13px; }
+
+:focus-visible { outline: 2.5px solid var(--gold-d); outline-offset: 2px; border-radius: 6px; }
+
+/* --- amount entry -------------------------------------------------------- */
+
+.to-chip {
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 13px; border-radius: 15px; background: var(--field);
+  margin-bottom: 26px;
+}
+.to-chip .av { width: 36px; height: 36px; border-radius: 11px; font-size: 12.5px; }
+
+.amt-wrap { text-align: center; margin: 8px 0 6px; }
+.amt-in {
+  border: 0; background: none; width: 100%; text-align: center;
+  font-family: var(--ui); font-size: 46px; font-weight: 800;
+  letter-spacing: -2px; color: var(--ink);
+  font-variant-numeric: tabular-nums; padding: 0;
+}
+.amt-in:focus { outline: none; }
+.amt-in::placeholder { color: #CDD3DF; }
+.amt-hint { font-size: 13px; color: var(--ink-3); text-align: center; margin-bottom: 22px; }
+
+.note-in {
+  width: 100%; padding: 13px 15px; border-radius: 14px;
+  border: 1px solid var(--line); background: var(--card);
+  font: inherit; font-size: 14.5px; color: var(--ink); margin-bottom: 12px;
+}
+.note-in:focus { outline: none; border-color: var(--ink-3); }
+.note-in::placeholder { color: var(--ink-3); }
+
+.quick { display: flex; gap: 7px; margin-bottom: 22px; flex-wrap: wrap; }
+.quick button {
+  flex: 1; min-width: 74px; padding: 9px 6px; border-radius: 11px;
+  border: 1px solid var(--line); background: var(--card);
+  font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+  cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.quick button:hover { border-color: var(--ink-3); color: var(--ink); }
+
+.spacer { flex: 1; }
+
+/* --- review -------------------------------------------------------------- */
+
+.review-amt {
+  font-size: 44px; font-weight: 800; letter-spacing: -1.8px;
+  font-variant-numeric: tabular-nums; text-align: center; margin: 14px 0 5px;
+}
+.review-to { text-align: center; font-size: 14.5px; color: var(--ink-2); margin-bottom: 26px; }
+.rows { border-top: 1px solid var(--line); margin-bottom: 24px; }
+.row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 13px 2px; border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+.row span:first-child { color: var(--ink-2); }
+.row span:last-child { font-weight: 600; }
+
+/* --- the wait: this is the signature ------------------------------------- */
+
+.checking { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+.check-amt {
+  font-size: 44px; font-weight: 800; letter-spacing: -1.8px;
+  font-variant-numeric: tabular-nums; text-align: center;
+  color: var(--ink-3); margin-bottom: 34px;
+}
+.track { display: flex; flex-direction: column; gap: 0; }
+.stage-row {
+  display: flex; align-items: center; gap: 14px;
+  font-size: 14.5px; color: var(--ink-3);
+  transition: color .3s;
+}
+.stage-row.done { color: var(--ink); }
+.pip {
+  width: 11px; height: 11px; border-radius: 50%; flex: none;
+  border: 2px solid var(--line); background: var(--card);
+  transition: border-color .3s, background .3s;
+}
+.stage-row.done .pip { border-color: var(--gold); background: var(--gold); }
+.rail { width: 2px; height: 26px; background: var(--line); margin-left: 4.5px; }
+.rail.done { background: var(--gold); }
+
+/* --- verdict ------------------------------------------------------------- */
+
+.verdict { flex: 1; display: flex; flex-direction: column; }
+.seal {
+  width: 68px; height: 68px; border-radius: 50%;
+  display: grid; place-items: center; margin: 20px auto 20px;
+  font-size: 30px; font-weight: 700;
+  animation: seal .34s cubic-bezier(.2,1.5,.4,1);
+}
+@keyframes seal { from { transform: scale(.5); opacity: 0; } }
+.seal.ok   { background: var(--ok-dim);   color: var(--ok); }
+.seal.held { background: var(--held-dim); color: var(--held); }
+.seal.no   { background: var(--no-dim);   color: var(--no); }
+
+.v-head { text-align: center; font-size: 21px; font-weight: 700; letter-spacing: -.4px; }
+.v-amt {
+  text-align: center; font-size: 38px; font-weight: 800; letter-spacing: -1.5px;
+  font-variant-numeric: tabular-nums; margin: 10px 0 6px;
+}
+.v-sub {
+  text-align: center; font-size: 14.5px; color: var(--ink-2);
+  line-height: 1.55; max-width: 280px; margin: 0 auto 22px;
+}
+.stamp {
+  font-family: var(--mono); font-size: 11.5px; color: var(--ink-3);
+  text-align: center; margin-bottom: 20px; line-height: 1.7;
+}
+
+/* --- the challenge ------------------------------------------------------- */
+
+.ask {
+  background: var(--held-dim); border-radius: 18px;
+  padding: 20px 18px; margin-bottom: 18px;
+}
+.ask-t { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+.ask-q { font-size: 14px; color: #6B4A0E; line-height: 1.55; }
+.ask-row { display: flex; gap: 9px; margin-top: 17px; }
+.ask-row .btn { padding: 14px; font-size: 14.5px; }
+.ask-row .btn.no { background: var(--card); color: var(--no); }
+
+/* --- demo rail ----------------------------------------------------------- */
+
+.rail-panel {
+  border: 1px dashed #B9C2D4; border-radius: 16px;
+  padding: 18px 18px 16px; background: rgba(255,255,255,.5);
+  font-family: var(--mono);
+}
+.rail-panel h3 {
+  margin: 0 0 3px; font-size: 11px; font-weight: 600;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2);
+}
+.rail-note {
+  font-size: 11.5px; color: var(--ink-3); line-height: 1.6;
+  margin: 0 0 16px; font-family: var(--ui);
+}
+.ctl { margin-bottom: 15px; }
+.ctl > span {
+  display: block; font-size: 10.5px; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px;
+}
+.seg { display: flex; gap: 5px; flex-wrap: wrap; }
+.seg button {
+  padding: 7px 11px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--card); cursor: pointer;
+  font-family: var(--mono); font-size: 12px; color: var(--ink-2);
+}
+.seg button[aria-pressed="true"] {
+  background: var(--ink); border-color: var(--ink); color: #fff;
+}
+.rail-panel select {
+  width: 100%; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--card);
+  font-family: var(--mono); font-size: 12px; color: var(--ink);
+}
+.meter {
+  border-top: 1px solid var(--line); padding-top: 13px; margin-top: 3px;
+  font-size: 11.5px; color: var(--ink-2); line-height: 1.85;
+}
+.meter b { color: var(--ink); font-weight: 600; }
+.meter .warn { color: var(--no); font-weight: 600; }
+.reset {
+  margin-top: 12px; width: 100%; padding: 8px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--card); cursor: pointer;
+  font-family: var(--mono); font-size: 11.5px; color: var(--ink-2);
+}
+.reset:hover { border-color: var(--ink-3); color: var(--ink); }
+
+.offline {
+  display: none; margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+  background: var(--no-dim); color: var(--no);
+  font-family: var(--ui); font-size: 12.5px; line-height: 1.5;
+}
+.offline.on { display: block; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="brand">
+    <div class="mark">U</div>
+    <b>Uni<i>Pay</i></b>
+  </div>
+  <a class="console-link" href="/" target="_blank">Bank console&nbsp;&nearr;</a>
+</div>
+
+<div class="stage">
+  <div class="phone">
+
+    <!-- home -->
+    <section class="screen on" id="s-home">
+      <div class="bal-label">Balance</div>
+      <div class="bal" id="balance">₹10,00,000</div>
+      <div class="bal-sub" id="handle-line">sai@unipay</div>
+
+      <div class="sect">Recent</div>
+      <div class="payees" id="payees"></div>
+
+      <div class="spacer"></div>
+      <button class="btn" id="to-new">Pay a new UPI ID</button>
+    </section>
+
+    <!-- amount -->
+    <section class="screen" id="s-amount">
+      <button class="back" id="b1">&larr; Back</button>
+      <div class="to-chip" id="to-chip"></div>
+
+      <div class="amt-wrap">
+        <input class="amt-in" id="amount" type="text" inputmode="decimal"
+               placeholder="₹0" autocomplete="off" aria-label="Amount">
+      </div>
+      <div class="amt-hint" id="amt-hint">Enter an amount</div>
+
+      <input class="note-in" id="upi-id" placeholder="name@unipay"
+             autocomplete="off" aria-label="UPI ID" style="display:none">
+      <input class="note-in" id="note" placeholder="Add a note (optional)"
+             autocomplete="off" aria-label="Note">
+
+      <div class="quick" id="quick"></div>
+      <div class="spacer"></div>
+      <button class="btn" id="to-review">Continue</button>
+    </section>
+
+    <!-- review -->
+    <section class="screen" id="s-review">
+      <button class="back" id="b2">&larr; Back</button>
+      <div class="review-amt" id="r-amt">₹0</div>
+      <div class="review-to" id="r-to">to</div>
+      <div class="rows">
+        <div class="row"><span>From</span><span id="r-from">sai@unipay</span></div>
+        <div class="row"><span>To</span><span id="r-handle">—</span></div>
+        <div class="row"><span>Note</span><span id="r-note">—</span></div>
+      </div>
+      <div class="spacer"></div>
+      <button class="btn gold" id="pay">Pay now</button>
+    </section>
+
+    <!-- the wait -->
+    <section class="screen" id="s-checking">
+      <div class="checking">
+        <div class="check-amt" id="c-amt">₹0</div>
+        <div class="track">
+          <div class="stage-row" id="st1"><div class="pip"></div><span>Payment received</span></div>
+          <div class="rail" id="rl1"></div>
+          <div class="stage-row" id="st2"><div class="pip"></div><span>Your bank is checking it</span></div>
+          <div class="rail" id="rl2"></div>
+          <div class="stage-row" id="st3"><div class="pip"></div><span>Decision</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- challenge -->
+    <section class="screen" id="s-ask">
+      <div class="seal held">?</div>
+      <div class="v-head">One quick check</div>
+      <div class="v-amt" id="a-amt">₹0</div>
+      <div class="spacer"></div>
+      <div class="ask">
+        <div class="ask-t">Did you make this payment?</div>
+        <div class="ask-q" id="a-q">—</div>
+        <div class="ask-row">
+          <button class="btn gold" id="ask-yes">Yes, that was me</button>
+          <button class="btn no" id="ask-no">No</button>
+        </div>
+      </div>
+      <div class="stamp">Your bank held this payment until you answer.<br>
+        No answer means it will not go through.</div>
+    </section>
+
+    <!-- verdict -->
+    <section class="screen" id="s-done">
+      <div class="verdict">
+        <div class="seal" id="d-seal">✓</div>
+        <div class="v-head" id="d-head">Paid</div>
+        <div class="v-amt" id="d-amt">₹0</div>
+        <div class="v-sub" id="d-sub">—</div>
+        <div class="stamp" id="d-stamp">—</div>
+        <div class="spacer"></div>
+        <button class="btn ghost" id="again">Make another payment</button>
+      </div>
+    </section>
+
+  </div>
+
+  <aside class="rail-panel">
+    <h3>Demo controls</h3>
+    <p class="rail-note">
+      Not part of the app. These set the conditions a real bank would read from
+      the device, the network and the clock.
+    </p>
+
+    <div class="ctl">
+      <span>Time of payment</span>
+      <div class="seg" id="seg-clock">
+        <button data-v="254" aria-pressed="true">2 pm</button>
+        <button data-v="243" aria-pressed="false">3 am</button>
+      </div>
+    </div>
+
+    <div class="ctl">
+      <span>This device</span>
+      <div class="seg" id="seg-dev">
+        <button data-v="1" aria-pressed="true">Known</button>
+        <button data-v="0" aria-pressed="false">New</button>
+      </div>
+    </div>
+
+    <div class="ctl">
+      <span>Paying from</span>
+      <select id="city"></select>
+    </div>
+
+    <div class="meter">
+      account <b id="m-acct">—</b><br>
+      payments this hour <b id="m-count">0</b> <span id="m-warn"></span>
+    </div>
+    <button class="reset" id="new-acct">Start a fresh account</button>
+
+    <div class="offline" id="offline">
+      Can't reach the bank. Start the services with <b>./demo.sh</b>.
+    </div>
+  </aside>
+</div>
+
+<script>
+const API = 'http://localhost:8080/api';
+const el = id => document.getElementById(id);
+
+const CITIES = [
+  { name:'Mumbai', lat:19.0760, lon:72.8777 }, { name:'Delhi', lat:28.7041, lon:77.1025 },
+  { name:'Bengaluru', lat:12.9716, lon:77.5946 }, { name:'Hyderabad', lat:17.3850, lon:78.4867 },
+  { name:'Chennai', lat:13.0827, lon:80.2707 }, { name:'Kolkata', lat:22.5726, lon:88.3639 },
+  { name:'Vijayawada', lat:16.5062, lon:80.6480 }, { name:'Pune', lat:18.5204, lon:73.8567 }
+];
+
+// The burst rule fires on more than this many PRIOR payments inside one hour
+// (config.yaml -> rules.rapid_sender_transfers.max_allowed). Surfaced in the
+// rail so a burst block during the demo is expected rather than alarming.
+const BURST_AFTER = 3;
+
+const money = n => '₹' + Number(n || 0).toLocaleString('en-IN',
+  { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+
+let state = {
+  balance: 1000000,
+  clock: 254,
+  trusted: true,
+  city: CITIES[0],
+  sentThisHour: 0,
+  account: '',
+  target: null,
+  amount: 0,
+  pending: null
+};
+
+function freshAccount() {
+  state.account = 'C-UP' + Date.now().toString().slice(-6);
+  state.sentThisHour = 0;
+  paintRail();
+}
+
+// Saved payees have collected money before, so they are not "new receivers".
+// A typed UPI ID has no history at all -- which is a genuine fraud signal, not
+// something invented for the demo.
+const PAYEES = [
+  { name:'Ravi Kumar',  handle:'ravi@unipay',   initials:'RK', acct:'C-RAVI',  bal:50000,  type:'TRANSFER' },
+  { name:'Meera Sastry',handle:'meera@unipay',  initials:'MS', acct:'C-MEERA', bal:38000,  type:'TRANSFER' },
+  { name:'Chai Point',  handle:'chaipoint@ubi', initials:'CP', acct:'M-CHAI',  bal:120000, type:'PAYMENT', shop:true }
+];
+
+function show(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('on'));
+  el(id).classList.add('on');
+}
+
+function paintHome() {
+  el('balance').textContent = money(state.balance);
+  el('payees').innerHTML = PAYEES.map((p, i) => `
+    <button class="payee" data-i="${i}">
+      <div class="av ${p.shop ? 'shop' : ''}">${p.initials}</div>
+      <div><div class="payee-n">${p.name}</div><div class="payee-h">${p.handle}</div></div>
+    </button>`).join('');
+  el('payees').querySelectorAll('.payee').forEach(b =>
+    b.addEventListener('click', () => openAmount(PAYEES[+b.dataset.i])));
+}
+
+function paintRail() {
+  el('m-acct').textContent = state.account;
+  el('m-count').textContent = state.sentThisHour;
+  el('m-warn').innerHTML = state.sentThisHour > BURST_AFTER
+    ? '<span class="warn">— burst rule will fire</span>'
+    : (state.sentThisHour === BURST_AFTER ? '<span class="warn">— one more fires the burst rule</span>' : '');
+}
+
+function openAmount(payee) {
+  state.target = payee;
+  const known = !!payee;
+  el('upi-id').style.display = known ? 'none' : '';
+  el('to-chip').innerHTML = known
+    ? `<div class="av ${payee.shop ? 'shop' : ''}">${payee.initials}</div>
+       <div><div class="payee-n">${payee.name}</div><div class="payee-h">${payee.handle}</div></div>`
+    : `<div class="av">+</div><div><div class="payee-n">New UPI ID</div>
+       <div class="payee-h">Never paid before</div></div>`;
+  el('amount').value = '';
+  el('note').value = '';
+  el('upi-id').value = '';
+  el('amt-hint').textContent = 'Available ' + money(state.balance);
+  el('quick').innerHTML = [500, 2500, 25000, state.balance].map(v =>
+    `<button data-v="${v}">${v === state.balance ? 'All' : money(v)}</button>`).join('');
+  el('quick').querySelectorAll('button').forEach(b =>
+    b.addEventListener('click', () => { el('amount').value = b.dataset.v; }));
+  show('s-amount');
+  setTimeout(() => el('amount').focus(), 60);
+}
+
+el('to-new').addEventListener('click', () => openAmount(null));
+el('b1').addEventListener('click', () => show('s-home'));
+el('b2').addEventListener('click', () => show('s-amount'));
+
+el('to-review').addEventListener('click', () => {
+  const amt = parseFloat(el('amount').value);
+  if (!(amt > 0)) { el('amt-hint').textContent = 'Enter an amount to continue'; return; }
+  const typed = el('upi-id').value.trim();
+  if (!state.target && !typed) { el('upi-id').focus(); return; }
+
+  state.amount = amt;
+  const handle = state.target ? state.target.handle : typed;
+  el('r-amt').textContent = money(amt);
+  el('r-to').textContent = 'to ' + (state.target ? state.target.name : handle);
+  el('r-handle').textContent = handle;
+  el('r-note').textContent = el('note').value.trim() || '—';
+  show('s-review');
+});
+
+function setStage(n) {
+  [['st1','rl1'],['st2','rl2'],['st3',null]].forEach(([s, r], i) => {
+    el(s).classList.toggle('done', i < n);
+    if (r) el(r).classList.toggle('done', i < n - 1);
+  });
+}
+
+el('pay').addEventListener('click', pay);
+
+async function pay() {
+  const amt = state.amount;
+  const typed = el('upi-id').value.trim();
+  const t = state.target;
+  const handle = t ? t.handle : typed;
+  const destAcct = t ? t.acct : 'C-NEW' + Date.now().toString().slice(-5);
+
+  el('c-amt').textContent = money(amt);
+  show('s-checking');
+  setStage(1);
+
+  const body = {
+    step: state.clock,
+    type: t ? t.type : 'TRANSFER',
+    amount: amt,
+    nameOrig: state.account,
+    oldbalanceOrg: state.balance,
+    newbalanceOrig: Math.max(state.balance - amt, 0),
+    nameDest: destAcct,
+    oldbalanceDest: t ? t.bal : 0,
+    newbalanceDest: (t ? t.bal : 0) + amt,
+    trustedDevice: state.trusted,
+    location: state.city.name,
+    locationLat: state.city.lat,
+    locationLon: state.city.lon
+  };
+
+  setTimeout(() => setStage(2), 260);
+
+  let r;
+  try {
+    const res = await fetch(`${API}/transactions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    r = await res.json();
+    if (!res.ok) throw new Error(r.error || 'rejected');
+  } catch (e) {
+    el('offline').classList.add('on');
+    show('s-review');
+    return;
+  }
+  el('offline').classList.remove('on');
+
+  state.sentThisHour++;
+  paintRail();
+  state.pending = { r, amt, handle };
+
+  // Let the third pip land rather than snapping straight to the verdict --
+  // the wait is the thing this page exists to make visible.
+  await new Promise(res => setTimeout(res, 340));
+  setStage(3);
+  await new Promise(res => setTimeout(res, 260));
+
+  if (r.decision === 'OTP_CONFIRM' && r.otp) {
+    el('a-amt').textContent = money(amt);
+    el('a-q').textContent = r.otp.question;
+    show('s-ask');
+    return;
+  }
+  settle(r.decision, r, amt, handle);
+}
+
+el('ask-yes').addEventListener('click', () => answer(true));
+el('ask-no').addEventListener('click', () => answer(false));
+
+async function answer(confirmed) {
+  const { r, amt, handle } = state.pending;
+  el('ask-yes').disabled = el('ask-no').disabled = true;
+  try {
+    const res = await fetch(`${API}/transactions/${r.id}/otp?confirmed=${confirmed}`,
+                            { method: 'POST' });
+    const out = await res.json();
+    settle(out.decision, r, amt, handle);
+  } catch (e) {
+    el('offline').classList.add('on');
+  } finally {
+    el('ask-yes').disabled = el('ask-no').disabled = false;
+  }
+}
+
+function settle(decision, r, amt, handle) {
+  const seal = el('d-seal');
+  seal.className = 'seal';
+
+  if (decision === 'APPROVE') {
+    state.balance -= amt;
+    seal.classList.add('ok'); seal.textContent = '✓';
+    el('d-head').textContent = 'Paid';
+    el('d-sub').textContent = 'Sent to ' + handle + '.';
+  } else {
+    seal.classList.add('no'); seal.textContent = '✕';
+    el('d-head').textContent = 'Not paid';
+    // The customer is never told which signal caught it. A fraudster who
+    // learns the reason learns how to avoid it next time. The full reason is
+    // on the bank console against this same reference.
+    el('d-sub').textContent =
+      'Your bank stopped this payment to keep your account safe. '
+      + 'Nothing has left your balance.';
+  }
+
+  el('d-amt').textContent = money(amt);
+  el('d-stamp').innerHTML =
+    `ref TXN-${r.id} &nbsp;·&nbsp; decided in ${r.processingMillis} ms`
+    + (r.degradedMode ? '<br>bank systems running in reduced mode' : '');
+  paintHome();
+  show('s-done');
+}
+
+el('again').addEventListener('click', () => { paintHome(); show('s-home'); });
+
+// --- demo rail ---------------------------------------------------------------
+
+function seg(id, apply) {
+  el(id).querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    el(id).querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', 'false'));
+    b.setAttribute('aria-pressed', 'true');
+    apply(b.dataset.v);
+  }));
+}
+seg('seg-clock', v => {
+  state.clock = parseInt(v, 10);
+  state.sentThisHour = 0;   // a different hour is a different velocity window
+  paintRail();
+});
+seg('seg-dev', v => { state.trusted = v === '1'; });
+
+el('city').innerHTML = CITIES.map(c => `<option>${c.name}</option>`).join('');
+el('city').addEventListener('change', () => {
+  state.city = CITIES.find(c => c.name === el('city').value);
+});
+
+el('new-acct').addEventListener('click', () => {
+  freshAccount();
+  state.balance = 1000000;
+  paintHome();
+  show('s-home');
+});
+
+freshAccount();
+paintHome();
+el('handle-line').textContent = 'sai@unipay';
+</script>
+</body>
+</html>

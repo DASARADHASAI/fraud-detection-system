@@ -8,6 +8,23 @@ Design and rationale: [superpowers/specs/2026-08-28-demonstration-plan-design.md
 
 ---
 
+## The two-window setup
+
+This is the point of the whole demonstration. Arrange before you start:
+
+| Left half of screen | Right half |
+|---|---|
+| **UniPay** — `localhost:8080/pay.html` | **FraudDesk** — `localhost:8080` |
+| the customer's payment app | the bank's fraud console |
+
+Open the customer app from the **Customer app ↗** link in the console masthead,
+then drag the windows side by side. Nobody watching a payment app get stopped by
+a separate console thinks you are calling your own page.
+
+The line to say once, early:
+
+> "We simulate the bank. We do not simulate the fraud detection."
+
 ## Before you press record
 
 ```bash
@@ -22,15 +39,20 @@ Design and rationale: [superpowers/specs/2026-08-28-demonstration-plan-design.md
 
 ---
 
-## Beat 1 — Control (~30 s)
+## Beat 1 — Control (~40 s)
 
-**Do:** In *New payment*, leave the defaults (Rs 2,500, C1001 → M-GROCER). Send.
+**Do:** In **UniPay**, tap *Chai Point*, enter **500**, Continue, Pay now.
+Watch it say **Paid**, then point at the console on the right — the same payment
+has appeared in the decision feed.
 
 **Say:**
-> "An ordinary payment. Approved automatically in about thirty milliseconds, and
-> the system says why: it does not drain the sender's account. I am starting here
-> deliberately — if I only showed you fraud being blocked, you could not tell
-> whether the system was thinking or just blocking everything."
+> "This is a customer's payment app. It holds a balance and knows its payees, and
+> it has no idea what a fraud model is — it calls the bank at the authorisation
+> step and gets back one of three answers. An ordinary payment, approved in about
+> thirty milliseconds, and over here the bank's console shows why: it does not
+> drain the sender's account. I am starting with a payment that *works*, because
+> if I only showed you fraud being blocked you could not tell whether the system
+> was thinking or just blocking everything."
 
 ---
 
@@ -66,9 +88,17 @@ Point at the SHAP contributions. Do not read them all out; name the top one.
 
 ## Beat 4 — Uncertainty (~90 s)
 
-**Do:** Click scenario **R6**. The OTP modal appears. Pause on it. Click **"Yes, that was me"**.
+**Do:** In **UniPay**, set the demo rail to **3 am** and **Known** device. Tap
+*Pay a new UPI ID*, enter **480000** and a handle like `ravi.new@unipay`.
+Continue, Pay now. The app shows **One quick check**. Pause there. Tap
+**"Yes, that was me"** — it turns to **Paid**.
 
-**Say, while the modal is open:**
+> Doing this from the customer app rather than the console scenario button is
+> worth the extra fifteen seconds: the panel sees a customer being asked, not a
+> developer clicking a test case. The console scenario **R6** is the fallback if
+> typing goes wrong.
+
+**Say, while the challenge is on screen:**
 > "Rs 4,80,000 at three in the morning, but from a device this customer has used
 > before. The two models disagree, and disagreement is itself a signal — so
 > instead of guessing, the system asks the customer."
@@ -81,8 +111,16 @@ Point at the SHAP contributions. Do not read them all out; name the top one.
 > nothing may soften a decision except the customer answering yes — that is the
 > one piece of evidence no other component has."
 
-> *If asked why 3am:* the clock is a real model feature. The Clock dropdown on
-> the form changes it live — the same payment at 2pm scores 0.22 and approves.
+> *If asked why 3am:* the clock is a real model feature. Flip the demo rail to
+> 2 pm and send the identical payment — it scores 0.22 instead of 0.2954 and
+> approves. That is worth showing if they ask; it makes the model's behaviour
+> concrete rather than asserted.
+
+**Then show the asymmetry — this earns marks:**
+> "Notice what the customer was told when a payment is stopped: nothing about
+> why. 'Your bank stopped this payment to keep your account safe.' The full
+> reason exists on the console, against the same reference number. Telling a
+> fraudster which signal caught them is how they learn to avoid it next time."
 
 ---
 
@@ -163,6 +201,8 @@ Wait for the dot to go green again before moving on.
 | Ollama down | Ignore it | "The narration layer is optional by design — the decision never waits on it." |
 | A scenario gives an unexpected decision | Open the row and read the actual reason | "Let's look at why it decided that" — the explanation is the product. |
 | Dashboard unresponsive | Reload the page | State lives in the database, not the browser. |
+| UniPay says "Can't reach the bank" | The backend is down — check the console's health dots | Move to beat 5 early; this *is* beat 5. |
+| Payments suddenly all blocked | You have sent 4+ from one account in one hour — the burst rule is firing | "That is the burst rule doing its job." Tap **Start a fresh account** in the demo rail. |
 | Total loss | Play the backup video | Narrate over it exactly as above. |
 
 ---
