@@ -24,6 +24,20 @@ import requests
 BACKEND = "http://localhost:8080/api"
 ML = "http://localhost:5001"
 
+# PaySim's clock: one step = one hour, so step % 24 is the hour of day.
+# 254 % 24 = 14 -> 2pm, an ordinary afternoon.
+# 243 % 24 =  3 -> 3am, which the model treats as riskier (is_night).
+#
+# THESE MUST BE SENT. Omit `step` and the ML service falls back to wall-clock
+# UTC hours (live_features.py:134), and `hour_of_day` / `is_night` are real
+# model features -- so the identical payment below scores 0.2954 at 3am and
+# 0.2206 at 2pm, either side of the 0.35 approve threshold. This suite used to
+# send no step at all, which meant the OTP checks passed only between 05:30 and
+# 11:30 IST and failed silently for the rest of the day. acceptance_tests.py
+# has pinned the clock since Phase 8 for exactly this reason.
+STEP_AFTERNOON = 254
+STEP_NIGHT = 243
+
 failures: list[str] = []
 
 
@@ -40,6 +54,7 @@ def check(condition: bool, description: str, detail: str = "") -> None:
 def submit(**overrides) -> dict:
     """Post a payment and return the decision."""
     txn = {
+        "step": STEP_AFTERNOON,
         "type": "PAYMENT", "amount": 2500.0, "nameOrig": "C-TEST",
         "oldbalanceOrg": 50000.0, "newbalanceOrig": 47500.0,
         "nameDest": "M-SHOP", "oldbalanceDest": 10000.0, "newbalanceDest": 12500.0,
@@ -128,7 +143,7 @@ def main() -> int:
     uncertain = submit(type="TRANSFER", amount=480000.0, nameOrig="C-R4",
                        oldbalanceOrg=1000000.0, newbalanceOrig=520000.0,
                        nameDest="C-R4PAYEE", oldbalanceDest=0.0,
-                       newbalanceDest=480000.0)
+                       newbalanceDest=480000.0, step=STEP_NIGHT)
     check(uncertain["decision"] == "OTP_CONFIRM",
           "an uncertain payment triggers a customer challenge",
           f"got {uncertain['decision']} at score {uncertain['fraudScore']}")
