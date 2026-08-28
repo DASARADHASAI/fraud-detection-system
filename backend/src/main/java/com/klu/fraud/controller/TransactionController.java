@@ -4,10 +4,12 @@ import com.klu.fraud.config.SharedConfig;
 import com.klu.fraud.model.Decision;
 import com.klu.fraud.model.OtpChallenge;
 import com.klu.fraud.model.ReviewLog;
+import com.klu.fraud.model.Account;
 import com.klu.fraud.model.Transaction;
 import com.klu.fraud.dto.TransactionRequest;
 import com.klu.fraud.repository.ReviewLogRepository;
 import com.klu.fraud.repository.TransactionRepository;
+import com.klu.fraud.service.LedgerService;
 import com.klu.fraud.service.MlServiceClient;
 import com.klu.fraud.service.OtpService;
 import com.klu.fraud.service.QuickSignalService;
@@ -18,6 +20,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -60,6 +63,7 @@ public class TransactionController {
     private final MlServiceClient mlClient;
     private final QuickSignalService quickSignals;
     private final SharedConfig config;
+    private final LedgerService ledger;
 
     public TransactionController(RoutingService routing,
                                  TransactionRepository transactions,
@@ -67,7 +71,8 @@ public class TransactionController {
                                  OtpService otpService,
                                  MlServiceClient mlClient,
                                  QuickSignalService quickSignals,
-                                 SharedConfig config) {
+                                 SharedConfig config,
+                                 LedgerService ledger) {
         this.routing = routing;
         this.transactions = transactions;
         this.reviewLog = reviewLog;
@@ -75,6 +80,7 @@ public class TransactionController {
         this.mlClient = mlClient;
         this.quickSignals = quickSignals;
         this.config = config;
+        this.ledger = ledger;
     }
 
     /** Submit a payment. Comes back already decided - nothing waits for a human. */
@@ -82,8 +88,15 @@ public class TransactionController {
     public ResponseEntity<Map<String, Object>> submit(
             @Valid @RequestBody TransactionRequest request) {
 
+        applyLedgerBalances(request);
+
         RoutingService.RoutingOutcome outcome = routing.process(request);
         Transaction txn = outcome.transaction();
+
+        if (txn.getFinalDecision() == Decision.APPROVE) {
+            ledger.remember(txn.getNameDest(), "PAYMENT".equalsIgnoreCase(txn.getType()));
+            ledger.settle(txn);
+        }
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("id", txn.getId());
@@ -116,6 +129,38 @@ public class TransactionController {
         return ResponseEntity.ok(body);
     }
 
+    /**
+     * Replace the balances the caller claimed with what the ledger actually says.
+     *
+     * <p>>>> WHY THE CALLER DOES NOT GET TO STATE ITS OWN BALANCE <<<
+     * {@code amount_to_balance_ratio} and {@code orig_account_emptied} are the
+     * 3rd and 4th strongest features in the model, and both are computed from
+     * the sender's balance. If that number arrives in the request, an attacker
+     * chooses the evidence used to judge them: claim a huge opening balance and
+     * a drain stops looking like a drain.
+     *
+     * <p>So for any account this bank actually holds, the request's balances are
+     * overwritten from the ledger. Accounts the bank does not hold - which is
+     * every counterparty at another bank, and every account the test suites
+     * invent - are left exactly as sent, so this is additive and changes no
+     * existing behaviour.
+     */
+    private void applyLedgerBalances(TransactionRequest request) {
+        Optional<Account> payer = ledger.find(request.getNameOrig());
+        if (payer.isPresent()) {
+            double before = payer.get().getBalance();
+            request.setOldbalanceOrg(before);
+            request.setNewbalanceOrig(Math.max(0.0, before - request.getAmount()));
+        }
+
+        Optional<Account> payee = ledger.find(request.getNameDest());
+        if (payee.isPresent()) {
+            double before = payee.get().getBalance();
+            request.setOldbalanceDest(before);
+            request.setNewbalanceDest(before + request.getAmount());
+        }
+    }
+
     /** The customer answers: YES it was me, or NO it was not. */
     @PostMapping("/transactions/{id}/otp")
     public ResponseEntity<Map<String, Object>> answerOtp(
@@ -123,6 +168,17 @@ public class TransactionController {
             @RequestParam(name = "confirmed") boolean confirmed) {
         try {
             Decision decision = otpService.respond(id, confirmed);
+
+            // The customer said YES. That is the one piece of evidence nothing
+            // else in the system has, and it is the only thing allowed to move
+            // a decision toward APPROVE - so the money moves here, not earlier.
+            if (decision == Decision.APPROVE) {
+                transactions.findById(id).ifPresent(t -> {
+                    ledger.remember(t.getNameDest(), "PAYMENT".equalsIgnoreCase(t.getType()));
+                    ledger.settle(t);
+                });
+            }
+
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("id", id);
             body.put("customerAnswered", confirmed ? "YES" : "NO");

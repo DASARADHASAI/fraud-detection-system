@@ -48,4 +48,20 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
                             @Param("excludeId") Long excludeId);
 
     long countByFinalDecision(Decision decision);
+
+    /**
+     * The payees this customer has actually paid, successfully, before.
+     *
+     * <p>This replaces UniPay's hard-coded contact list. A payee is on it
+     * because a payment to them went through - not because the page said so.
+     * On a fresh account it is empty, which is correct: the first payment to
+     * anybody IS a payment to a new receiver, and that is a genuine signal the
+     * quick-signal layer reads.
+     *
+     * <p>Returns rows of [handle, paymentCount, lastPaidAt].
+     */
+    @Query("SELECT t.nameDest, COUNT(t), MAX(t.receivedAt) FROM Transaction t "
+            + "WHERE t.nameOrig = :orig AND t.finalDecision = 'APPROVE' "
+            + "GROUP BY t.nameDest ORDER BY MAX(t.receivedAt) DESC")
+    List<Object[]> findPayeesOf(@Param("orig") String orig);
 }

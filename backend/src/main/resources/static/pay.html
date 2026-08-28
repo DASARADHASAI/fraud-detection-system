@@ -11,7 +11,8 @@
   button in the bank's own screen and the bank's own screen answers. Nobody
   watching can tell whether anything independent happened.
 
-  This page is a separate application. It holds a balance, it knows its payees,
+  This page is a separate application. Its balance, its payees and whether this
+  device is known are all LOOKED UP FROM THE BANK (see AccountController),
   and it calls the fraud service the way a bank's core system would -- at the
   authorisation step, before the money moves. Nothing here can see a score, a
   model, or a rule. It only learns what it is allowed to learn: paid, held, or
@@ -381,10 +382,10 @@ body {
     <!-- home -->
     <section class="screen on" id="s-home">
       <div class="bal-label">Balance</div>
-      <div class="bal" id="balance">₹10,00,000</div>
-      <div class="bal-sub" id="handle-line">sai@unipay</div>
+      <div class="bal" id="balance">—</div>
+      <div class="bal-sub" id="handle-line">…</div>
 
-      <div class="sect">Recent</div>
+      <div class="sect">Payees</div>
       <div class="payees" id="payees"></div>
 
       <div class="spacer"></div>
@@ -418,7 +419,7 @@ body {
       <div class="review-amt" id="r-amt">₹0</div>
       <div class="review-to" id="r-to">to</div>
       <div class="rows">
-        <div class="row"><span>From</span><span id="r-from">sai@unipay</span></div>
+        <div class="row"><span>From</span><span id="r-from">…</span></div>
         <div class="row"><span>To</span><span id="r-handle">—</span></div>
         <div class="row"><span>Note</span><span id="r-note">—</span></div>
       </div>
@@ -474,10 +475,11 @@ body {
   </div>
 
   <aside class="rail-panel">
-    <h3>Demo controls</h3>
+    <h3>Conditions</h3>
     <p class="rail-note">
-      Not part of the app. These set the conditions a real bank would read from
-      the device, the network and the clock.
+      Your balance, your payees and whether this device is known are
+      <b>looked up by the bank</b> &mdash; not set here. The two below are the
+      only signals a browser cannot supply for itself.
     </p>
 
     <div class="ctl">
@@ -489,26 +491,22 @@ body {
     </div>
 
     <div class="ctl">
-      <span>This device</span>
-      <div class="seg" id="seg-dev">
-        <button data-v="1" aria-pressed="true">Known</button>
-        <button data-v="0" aria-pressed="false">New</button>
+      <span>Pretend I travelled</span>
+      <div class="seg" id="seg-travel">
+        <button data-v="" aria-pressed="true">Stay</button>
+        <button data-v="Kolkata" aria-pressed="false">Kolkata</button>
       </div>
     </div>
 
-    <div class="ctl">
-      <span>Paying from</span>
-      <select id="city"></select>
-    </div>
-
     <div class="meter">
-      account <b id="m-acct">—</b><br>
+      account <b id="m-acct">&mdash;</b><br>
+      this device <b id="m-dev">&mdash;</b><br>
+      location <b id="m-geo">&mdash;</b><br>
       payments this hour <b id="m-count">0</b> <span id="m-warn"></span>
     </div>
-    <button class="reset" id="new-acct">Start a fresh account</button>
 
     <div class="offline" id="offline">
-      Can't reach the bank. Start the services with <b>./demo.sh</b>.
+      Can't reach the bank. Start the ML service and the backend.
     </div>
   </aside>
 </div>
@@ -517,6 +515,10 @@ body {
 const API = 'http://localhost:8080/api';
 const el = id => document.getElementById(id);
 
+// Cities exist ONLY to turn a real GPS fix into a name a person can read, and
+// to stand in for a journey nobody can actually take mid-demonstration. The
+// coordinates sent to the bank are the device's real ones whenever the browser
+// gives them to us.
 const CITIES = [
   { name:'Mumbai', lat:19.0760, lon:72.8777 }, { name:'Delhi', lat:28.7041, lon:77.1025 },
   { name:'Bengaluru', lat:12.9716, lon:77.5946 }, { name:'Hyderabad', lat:17.3850, lon:78.4867 },
@@ -525,64 +527,190 @@ const CITIES = [
 ];
 
 // The burst rule fires on more than this many PRIOR payments inside one hour
-// (config.yaml -> rules.rapid_sender_transfers.max_allowed). Surfaced in the
-// rail so a burst block during the demo is expected rather than alarming.
+// (config.yaml -> rules.rapid_sender_transfers.max_allowed).
 const BURST_AFTER = 3;
 
 const money = n => '₹' + Number(n || 0).toLocaleString('en-IN',
   { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 
+// ---------------------------------------------------------------------------
+// State.
+//
+// >>> WHAT CHANGED, AND WHY IT MATTERS <<<
+// This object used to open with `balance: 1000000` and a hard-coded contact
+// list. Both were asserted by the page, which made two of the model's four
+// strongest features (amount_to_balance_ratio, orig_account_emptied) readable
+// from the payer's own request. Now every field below marked "from the bank"
+// is fetched, and the server overrides the balances regardless of what we send.
+// ---------------------------------------------------------------------------
 let state = {
-  balance: 1000000,
+  handle: '',        // from the bank
+  balance: 0,        // from the bank
+  trusted: false,    // from the bank -- earned by having been seen before
+  device: null,      // from the bank
+  payees: [],        // from the bank -- people we have actually paid
+  coords: null,      // from the browser's real GPS
+  city: null,
+  geo: 'pending',
+  travelTo: '',      // the one remaining simulation, see the rail
   clock: 254,
-  trusted: true,
-  city: CITIES[0],
   sentThisHour: 0,
-  account: '',
   target: null,
   amount: 0,
   pending: null
 };
-
-function freshAccount() {
-  state.account = 'C-UP' + Date.now().toString().slice(-6);
-  state.sentThisHour = 0;
-  paintRail();
-}
-
-// Saved payees have collected money before, so they are not "new receivers".
-// A typed UPI ID has no history at all -- which is a genuine fraud signal, not
-// something invented for the demo.
-const PAYEES = [
-  { name:'Ravi Kumar',  handle:'ravi@unipay',   initials:'RK', acct:'C-RAVI',  bal:50000,  type:'TRANSFER' },
-  { name:'Meera Sastry',handle:'meera@unipay',  initials:'MS', acct:'C-MEERA', bal:38000,  type:'TRANSFER' },
-  { name:'Chai Point',  handle:'chaipoint@ubi', initials:'CP', acct:'M-CHAI',  bal:120000, type:'PAYMENT', shop:true }
-];
 
 function show(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('on'));
   el(id).classList.add('on');
 }
 
+const initialsOf = name => (name || '?').split(/\s+/).filter(Boolean)
+  .slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?';
+
+// ---------------------------------------------------------------------------
+// This device.
+//
+// Trust is EARNED, not declared. The id lives in localStorage and is bound to
+// coarse device traits; the bank answers with what it knew BEFORE this sighting,
+// so a browser that has never paid before is untrusted on its first payment.
+// Clear the site data and you are a new device again, which is exactly right.
+// ---------------------------------------------------------------------------
+function fingerprint() {
+  let id = null;
+  try { id = localStorage.getItem('unipay.device'); } catch (e) { /* private mode */ }
+  if (!id) {
+    id = 'dev-' + (crypto.randomUUID ? crypto.randomUUID()
+                                     : Date.now() + '-' + Math.random().toString(36).slice(2));
+    try { localStorage.setItem('unipay.device', id); } catch (e) { /* ignore */ }
+  }
+  const traits = [navigator.userAgent, screen.width + 'x' + screen.height,
+                  Intl.DateTimeFormat().resolvedOptions().timeZone].join('|');
+  let h = 0;
+  for (let i = 0; i < traits.length; i++) h = (Math.imul(h, 31) + traits.charCodeAt(i)) | 0;
+  return id + '.' + (h >>> 0).toString(36);
+}
+
+// ---------------------------------------------------------------------------
+// Where this device actually is.
+// ---------------------------------------------------------------------------
+function nearestCity(lat, lon) {
+  let best = CITIES[0], bestD = Infinity;
+  for (const c of CITIES) {
+    const d = Math.hypot(c.lat - lat, c.lon - lon);
+    if (d < bestD) { bestD = d; best = c; }
+  }
+  return best;
+}
+
+function locate() {
+  return new Promise(resolve => {
+    if (!navigator.geolocation) { state.geo = 'unavailable'; return resolve(); }
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        state.coords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        state.city = nearestCity(state.coords.lat, state.coords.lon);
+        state.geo = 'real';
+        resolve();
+      },
+      () => { state.geo = 'denied'; resolve(); },
+      { timeout: 6000, maximumAge: 300000 }
+    );
+  });
+}
+
+/** What we actually send. A pretended journey overrides the real fix. */
+function locationForPayment() {
+  if (state.travelTo) {
+    const c = CITIES.find(x => x.name === state.travelTo);
+    return { location: c.name, locationLat: c.lat, locationLon: c.lon };
+  }
+  if (state.geo === 'real' && state.coords) {
+    return {
+      location: state.city.name,
+      locationLat: state.coords.lat,
+      locationLon: state.coords.lon
+    };
+  }
+  return {};   // no fix, so we claim none -- impossible travel simply cannot run
+}
+
+// ---------------------------------------------------------------------------
+// Talking to the bank
+// ---------------------------------------------------------------------------
+async function loadAccount() {
+  const a = await fetch(`${API}/account/me`).then(r => r.json());
+  state.handle = a.handle;
+  state.balance = a.balance;
+  el('handle-line').textContent = a.handle;
+}
+
+async function loadPayees() {
+  const rows = await fetch(
+    `${API}/account/${encodeURIComponent(state.handle)}/payees`).then(r => r.json());
+  state.payees = rows.map(p => ({
+    name: p.displayName,
+    handle: p.handle,
+    initials: initialsOf(p.displayName),
+    type: p.merchant ? 'PAYMENT' : 'TRANSFER',
+    shop: p.merchant,
+    payments: p.payments
+  }));
+}
+
+async function registerDevice() {
+  const res = await fetch(`${API}/device/seen`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fingerprint: fingerprint(), account: state.handle })
+  });
+  state.device = await res.json();
+  state.trusted = !!state.device.trusted;
+}
+
+// ---------------------------------------------------------------------------
+// Painting
+// ---------------------------------------------------------------------------
 function paintHome() {
   el('balance').textContent = money(state.balance);
-  el('payees').innerHTML = PAYEES.map((p, i) => `
+  if (!state.payees.length) {
+    el('payees').innerHTML =
+      `<div class="payee-h" style="padding:10px 2px;line-height:1.5">
+         No payees yet. Your first payment to anyone is a payment to a
+         <b>new receiver</b> &mdash; which is a real signal, not a penalty.
+       </div>`;
+    return;
+  }
+  el('payees').innerHTML = state.payees.map((p, i) => `
     <button class="payee" data-i="${i}">
       <div class="av ${p.shop ? 'shop' : ''}">${p.initials}</div>
-      <div><div class="payee-n">${p.name}</div><div class="payee-h">${p.handle}</div></div>
+      <div><div class="payee-n">${p.name}</div>
+           <div class="payee-h">${p.handle} · paid ${p.payments}&times;</div></div>
     </button>`).join('');
   el('payees').querySelectorAll('.payee').forEach(b =>
-    b.addEventListener('click', () => openAmount(PAYEES[+b.dataset.i])));
+    b.addEventListener('click', () => openAmount(state.payees[+b.dataset.i])));
 }
 
 function paintRail() {
-  el('m-acct').textContent = state.account;
+  el('m-acct').textContent = state.handle || '—';
+  el('m-dev').textContent = state.trusted
+    ? 'known to the bank'
+    : 'never seen before';
+  el('m-geo').textContent =
+    state.travelTo ? state.travelTo + ' (pretended)'
+    : state.geo === 'real' ? state.city.name + ' (real fix)'
+    : state.geo === 'denied' ? 'permission denied — not sent'
+    : state.geo === 'unavailable' ? 'unavailable — not sent'
+    : 'asking…';
   el('m-count').textContent = state.sentThisHour;
   el('m-warn').innerHTML = state.sentThisHour > BURST_AFTER
     ? '<span class="warn">— burst rule will fire</span>'
-    : (state.sentThisHour === BURST_AFTER ? '<span class="warn">— one more fires the burst rule</span>' : '');
+    : (state.sentThisHour === BURST_AFTER
+        ? '<span class="warn">— one more fires the burst rule</span>' : '');
 }
 
+// ---------------------------------------------------------------------------
+// Screens
+// ---------------------------------------------------------------------------
 function openAmount(payee) {
   state.target = payee;
   const known = !!payee;
@@ -619,6 +747,7 @@ el('to-review').addEventListener('click', () => {
   el('r-amt').textContent = money(amt);
   el('r-to').textContent = 'to ' + (state.target ? state.target.name : handle);
   el('r-handle').textContent = handle;
+  el('r-from').textContent = state.handle;
   el('r-note').textContent = el('note').value.trim() || '—';
   show('s-review');
 });
@@ -637,27 +766,27 @@ async function pay() {
   const typed = el('upi-id').value.trim();
   const t = state.target;
   const handle = t ? t.handle : typed;
-  const destAcct = t ? t.acct : 'C-NEW' + Date.now().toString().slice(-5);
 
   el('c-amt').textContent = money(amt);
   show('s-checking');
   setStage(1);
 
-  const body = {
+  // The balances below are our best knowledge, and the bank overrides them
+  // from its own ledger for any account it holds. See
+  // TransactionController.applyLedgerBalances -- a payer does not get to state
+  // the balance it is judged against.
+  const body = Object.assign({
     step: state.clock,
     type: t ? t.type : 'TRANSFER',
     amount: amt,
-    nameOrig: state.account,
+    nameOrig: state.handle,
     oldbalanceOrg: state.balance,
     newbalanceOrig: Math.max(state.balance - amt, 0),
-    nameDest: destAcct,
-    oldbalanceDest: t ? t.bal : 0,
-    newbalanceDest: (t ? t.bal : 0) + amt,
-    trustedDevice: state.trusted,
-    location: state.city.name,
-    locationLat: state.city.lat,
-    locationLon: state.city.lon
-  };
+    nameDest: handle,
+    oldbalanceDest: 0,
+    newbalanceDest: amt,
+    trustedDevice: state.trusted
+  }, locationForPayment());
 
   setTimeout(() => setStage(2), 260);
 
@@ -713,12 +842,11 @@ async function answer(confirmed) {
   }
 }
 
-function settle(decision, r, amt, handle) {
+async function settle(decision, r, amt, handle) {
   const seal = el('d-seal');
   seal.className = 'seal';
 
   if (decision === 'APPROVE') {
-    state.balance -= amt;
     seal.classList.add('ok'); seal.textContent = '✓';
     el('d-head').textContent = 'Paid';
     el('d-sub').textContent = 'Sent to ' + handle + '.';
@@ -737,14 +865,23 @@ function settle(decision, r, amt, handle) {
   el('d-stamp').innerHTML =
     `ref TXN-${r.id} &nbsp;·&nbsp; decided in ${r.processingMillis} ms`
     + (r.degradedMode ? '<br>bank systems running in reduced mode' : '');
-  paintHome();
   show('s-done');
+
+  // Re-read the balance and the payee list from the bank rather than adjusting
+  // them here. The ledger is the authority on both, and a payee only appears
+  // because a payment to them actually completed.
+  try {
+    await loadAccount();
+    await loadPayees();
+  } catch (e) { /* the verdict still stands; the panel just refreshes late */ }
+  paintHome();
 }
 
 el('again').addEventListener('click', () => { paintHome(); show('s-home'); });
 
-// --- demo rail ---------------------------------------------------------------
-
+// ---------------------------------------------------------------------------
+// The two conditions a browser cannot supply for itself
+// ---------------------------------------------------------------------------
 function seg(id, apply) {
   el(id).querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
     el(id).querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', 'false'));
@@ -752,28 +889,38 @@ function seg(id, apply) {
     apply(b.dataset.v);
   }));
 }
+
+// The clock: hour_of_day and is_night are real model features, and the server
+// cannot be time-travelled. This is how "what if this were 3am?" gets answered
+// at two in the afternoon.
 seg('seg-clock', v => {
   state.clock = parseInt(v, 10);
   state.sentThisHour = 0;   // a different hour is a different velocity window
   paintRail();
 });
-seg('seg-dev', v => { state.trusted = v === '1'; });
 
-el('city').innerHTML = CITIES.map(c => `<option>${c.name}</option>`).join('');
-el('city').addEventListener('change', () => {
-  state.city = CITIES.find(c => c.name === el('city').value);
-});
+// The journey: you cannot be in two cities an hour apart, which is the entire
+// point of the impossible-travel rule and the reason it cannot be demonstrated
+// with a real device. Labelled as pretended, in the interface and in the rail.
+seg('seg-travel', v => { state.travelTo = v || ''; paintRail(); });
 
-el('new-acct').addEventListener('click', () => {
-  freshAccount();
-  state.balance = 1000000;
+// ---------------------------------------------------------------------------
+// Boot: ask the bank who we are before drawing anything.
+// ---------------------------------------------------------------------------
+async function boot() {
+  try {
+    await loadAccount();
+    await registerDevice();
+    await loadPayees();
+  } catch (e) {
+    el('offline').classList.add('on');
+  }
   paintHome();
-  show('s-home');
-});
+  paintRail();
+  locate().then(paintRail);   // never block the first paint on a permission prompt
+}
 
-freshAccount();
-paintHome();
-el('handle-line').textContent = 'sai@unipay';
+boot();
 </script>
 </body>
 </html>

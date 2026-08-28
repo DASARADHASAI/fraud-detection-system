@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import sys
 import time
+import uuid
+from datetime import datetime
 
 import requests
 
@@ -51,6 +53,30 @@ def check(condition: bool, description: str, detail: str = "") -> None:
         failures.append(description)
 
 
+# >>> WHY EVERY ACCOUNT GETS A PER-RUN SUFFIX <<<
+# The rule layer counts payments per account over a WALL-CLOCK hour, against
+# durable H2 rows (RoutingService.applyLocalRules). With fixed names like
+# "M-SHOP" every run added to the same account's history, so running this suite
+# a few times inside one hour eventually tripped `rapid_receiver_collection` --
+# the mule rule -- and an ordinary payment started coming back BLOCK.
+#
+# The rule was right; the test was crowding one account. A fresh suffix per run
+# gives every case a clean history, exactly as acceptance_tests.py already does.
+RUN = datetime.now().strftime("%H%M%S") + "-" + uuid.uuid4().hex[:3]
+
+# ...except the blacklist. These names are hard-coded in QuickSignalService and
+# MEAN something: suffixing them would silently turn the known-fraud test into a
+# test of an ordinary unknown account, and it would still pass.
+BLACKLISTED = {"C-KNOWN-FRAUD", "C-BLACKLISTED", "C-MULE-001", "C000000001"}
+
+
+def acct(name: str) -> str:
+    """Make an account name unique to this run, unless it is a blacklisted one."""
+    if not name or name in BLACKLISTED:
+        return name
+    return f"{name}-{RUN}"
+
+
 def submit(**overrides) -> dict:
     """Post a payment and return the decision."""
     txn = {
@@ -60,6 +86,10 @@ def submit(**overrides) -> dict:
         "nameDest": "M-SHOP", "oldbalanceDest": 10000.0, "newbalanceDest": 12500.0,
     }
     txn.update(overrides)
+    # Applied here rather than at every call site, so the cases stay readable
+    # and no future test can forget to do it.
+    txn["nameOrig"] = acct(txn["nameOrig"])
+    txn["nameDest"] = acct(txn["nameDest"])
     return requests.post(f"{BACKEND}/transactions", json=txn, timeout=30).json()
 
 
@@ -77,6 +107,8 @@ def main() -> int:
         print(f"No backend on {BACKEND}")
         print("Start it with:  cd ../backend && mvn spring-boot:run")
         return 1
+
+    print(f"Account suffix for this run: -{RUN}")
 
     try:
         requests.post(f"{ML}/reset", timeout=5)

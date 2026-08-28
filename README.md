@@ -41,6 +41,11 @@ step-up (OTP) path rather than being silently approved or blocked.
 - [x] **Phase 6** — Spring Boot backend + automatic routing (`backend/`)
 - [x] **Phase 7** — Dashboard (`backend/src/main/resources/static/index.html`)
 - [x] **Phase 8** — Acceptance tests (`docs/acceptance-tests.md`)
+- [x] **Phase 9** — Demonstration: UniPay, `demo.sh`, run-sheet
+- [x] **Phase 10** — UPI adapter + integration contract (`ml-service/upi_adapter.py`, [docs/INTEGRATION.md](docs/INTEGRATION.md))
+- [x] **Phase 11** — UniPay's state moved into the bank (`backend/.../LedgerService.java`)
+- [x] **Phase 12** — Razorpay webhook receiver (`ml-service/webhook_razorpay.py`)
+- [x] **Phase 13** — Live wiring: tunnel, self-test, runbook ([docs/RAZORPAY-LIVE.md](docs/RAZORPAY-LIVE.md))
 
 ## Two applications, not one
 
@@ -66,6 +71,125 @@ Two deliberate details:
 - **The fraud signals come from the app's own state**, not from hard-coded test
   payloads. Paying your entire balance to a never-seen UPI ID *is* the
   account-drain shape; the model is not being fed a scenario.
+- **That state belongs to the bank, not to the page.** The balance, the payee
+  list and whether the device is known are all fetched from
+  `/api/account/*` and `/api/device/seen`. See below.
+
+### And a third door, for everyone else
+
+UniPay is one caller. The point of the system is that it is not the only
+possible one.
+
+`POST /predict/upi` accepts the payload a **UPI switch actually emits** — VPAs,
+a rupee amount object, a payee type — maps it onto the schema the model was
+trained on, and returns the same score, the same decision and the same reasons.
+The mapping lives in `ml-service/upi_adapter.py`, which imports no model and
+holds no scoring logic. A payment platform adopts this engine by writing an
+adapter, not a model.
+
+Measured: the same payment expressed in UPI's language and in PaySim's produces
+an identical score and an identical decision.
+
+The one thing a real bank does not have is the *beneficiary's* balance — it sits
+in another bank's core, behind NPCI. We measured what that blindness costs:
+across 300 payments the decision was unchanged 96.0% of the time, and of the 7
+frauds that stopped being blocked, **all 7 moved to OTP confirmation and none
+was silently approved**. The step-up path absorbs exactly the uncertainty that
+missing evidence creates.
+
+The contract, the field mapping, the measurements and the limits are in
+**[docs/INTEGRATION.md](docs/INTEGRATION.md)**.
+
+### A real payment gateway, and the number that justifies the whole design
+
+`POST /webhook/razorpay` takes a genuine Razorpay webhook — HMAC-signed, paise
+not rupees, `payment.authorized` treated as a decision and `payment.captured` as
+a report. Retries are deduplicated; an unsigned body is a 401; and with no
+secret configured it refuses everything rather than running unauthenticated.
+
+Building it surfaced the sharpest result in the project. A merchant cannot see
+the **payer's** balance — and that is where 68.3% of the model's importance
+lives. Measured against the beneficiary blindness of the bank-side route:
+
+| 300 payments, scored twice | beneficiary blind | **payer blind** |
+|---|---|---|
+| Decision unchanged | 96.0% | **44.7%** |
+| Fraud BLOCKed | 143/150 | **1/150** |
+| Fraud silently APPROVEd | **0** | **57/150** |
+
+**Losing the beneficiary's balance is nearly free. Losing the payer's balance
+collapses detection** — 38% of fraud silently approved. That is the quantified
+reason this system is built to sit at the remitter bank rather than at a
+merchant: not a preference, a 149-to-1 difference.
+
+One further limit, stated before anyone asks: **PaySim contains no merchant
+fraud at all.** All 8,213 frauds are TRANSFER or CASH_OUT; `PAYMENT` has zero.
+The webhook proves the integration — real payloads, real signatures. It cannot
+prove detection on this data.
+
+### Actually going live
+
+```bash
+export RAZORPAY_WEBHOOK_SECRET='whsec_pick_something_long'
+
+cd ml-service                                    # terminal 1
+RAZORPAY_WEBHOOK_SECRET="$RAZORPAY_WEBHOOK_SECRET" ./venv/bin/python app.py
+
+brew install cloudflared                         # once
+./razorpay-live.sh                               # terminal 2
+```
+
+`razorpay-live.sh` refuses to raise a tunnel until the local path is proved,
+then prints the exact URL and event to paste into the Razorpay dashboard. The
+full runbook, including the four ways this goes wrong and how to tell them
+apart, is in **[docs/RAZORPAY-LIVE.md](docs/RAZORPAY-LIVE.md)**.
+
+The secret is a value **you invent** and export — it is never issued to you and
+never lives in this repository. With no secret configured the endpoint returns
+503 to everything rather than running unauthenticated.
+
+### UniPay's state is the bank's, not the page's
+
+UniPay used to open with `balance: 1000000` and a hard-coded contact list, both
+sitting in JavaScript where anyone could read them in View Source. Three things
+moved to the server:
+
+| | Was | Is |
+|---|---|---|
+| **Balance** | a JS literal | the `accounts` table, read over REST |
+| **Payees** | a JS array of three names | derived from payments that actually completed |
+| **Known device** | a switch on the page | a fingerprint the bank has seen before |
+
+**This was a security fix, not cosmetics.** `amount_to_balance_ratio` and
+`orig_account_emptied` are the model's 3rd and 4th strongest features, and both
+are computed from the sender's balance. While that number arrived in the
+request, the payer chose the evidence used to judge it — claim a huge balance
+and a full account drain stops looking like one. `TransactionController`
+now overwrites the balances from the ledger for any account this bank holds:
+
+```
+claimed oldbalanceOrg  99,999,999   ->  stored 99,500  ->  BLOCK (0.7983)
+```
+
+Accounts the bank does *not* hold — every counterparty at another bank, and
+every account the test suites invent — are left exactly as sent, so the change
+is additive.
+
+Two consequences worth noticing on a fresh database:
+
+- **You start with no payees.** The first payment to anybody is a payment to a
+  new receiver, which is a genuine signal rather than a penalty. A payee appears
+  because a payment to them went through.
+- **Your browser is not trusted on its first payment.** Trust is earned by
+  having been seen before, so it means *"the bank has a record of this device"*
+  — something an attacker on a fresh machine does not have. Clear the site data
+  and you are a new device again.
+
+Two conditions still cannot come from a browser, and the panel on the right says
+so: the **clock** (a server cannot be time-travelled, and `hour_of_day` is a real
+feature) and a **journey** (you cannot be in two cities an hour apart — which is
+the entire point of the impossible-travel rule). Location otherwise comes from
+the device's real GPS fix, and when permission is denied nothing is claimed.
 
 ## Running it for a demonstration
 
@@ -126,6 +250,9 @@ ollama pull llama3.2
 | GET | `/health` | instant | Service, model and Ollama status |
 | GET | `/config` | instant | Decision thresholds, so Java need not duplicate them |
 | POST | `/predict` | **~28 ms** | Score a transaction — called on every payment |
+| POST | `/predict/upi` | **~28 ms** | Same engine, UPI-shaped payload — see [INTEGRATION.md](docs/INTEGRATION.md) |
+| POST | `/webhook/razorpay` | ~30 ms | A real Razorpay webhook, signature-verified |
+| GET | `/webhook/razorpay/recent` | instant | What actually arrived — the wiring diagnostic |
 | POST | `/explain` | **~3.7 s** | Plain-language write-up — called only when someone opens a transaction |
 | POST | `/chat` | ~3 s | Analyst question, grounded in `knowledge_base/` |
 | POST | `/reset` | instant | Clear demo history (testing only) |
@@ -151,6 +278,9 @@ rises only from 28 ms to 111 ms.
 ./venv/bin/python test_explain.py     # 13 checks — SHAP correctness
 ./venv/bin/python test_genai.py       # 36 checks — GenAI guards and fallbacks
 ./venv/bin/python test_api.py         # 44 checks — features, validation, HTTP
+./venv/bin/python test_upi.py         # 66 checks — the UPI adapter
+./venv/bin/python test_ledger.py      # 34 checks — balances, payees, device trust
+./venv/bin/python test_webhook.py     # 74 checks — Razorpay signatures, mapping, diagnostics
 ./venv/bin/python test_backend.py     # 33 checks — the Java backend over HTTP
 ./venv/bin/python acceptance_tests.py # 7 end-to-end cases (R0–R7)
 ```
@@ -314,6 +444,9 @@ Start the Python service first — the backend works without it, but in
 | POST | `/api/transactions/{id}/feedback?wasFraud=true` | Record the real outcome |
 | GET | `/api/stats` | Dashboard counts |
 | GET | `/api/health` | Both services + the thresholds in force |
+| GET | `/api/account/me` | The customer's real balance, from the ledger |
+| GET | `/api/account/{h}/payees` | Who they have actually paid before |
+| POST | `/api/device/seen` | Has this bank seen this device before? |
 
 Browse the database at `http://localhost:8080/h2-console`
 (JDBC URL `jdbc:h2:file:./data/frauddb`, user `sa`, no password).

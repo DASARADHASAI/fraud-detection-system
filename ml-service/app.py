@@ -39,11 +39,12 @@ RUN IT:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import traceback
 import uuid
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from threading import Lock
 
 import numpy as np
@@ -61,6 +62,12 @@ from live_features import (
     validate_transaction,
 )
 from train_model import route_decisions, score_transactions
+from upi_adapter import upi_to_transaction
+from webhook_razorpay import (
+    DECIDABLE_EVENT,
+    razorpay_to_upi,
+    verify_signature,
+)
 
 
 # =============================================================================
@@ -136,6 +143,34 @@ class ScoreCache:
 
 
 CACHE = ScoreCache()
+
+# --- Razorpay webhook configuration -----------------------------------------
+#
+# The secret is read from the environment, never from a file in the repository.
+# If it is unset the webhook refuses every request: an unverified webhook
+# endpoint is an open door, and anyone who learned the URL could post payments
+# and read the fraud engine's verdicts. Failing closed is the only safe default.
+RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+MERCHANT_VPA = os.environ.get("RAZORPAY_MERCHANT_VPA", "unipaystore@razorpay")
+
+# Gateways retry on any non-2xx, and a retried payment must not be scored twice
+# -- the second pass would see the first in its own history and score it
+# differently. Keyed on Razorpay's payment id, which is stable across retries.
+WEBHOOK_SEEN = ScoreCache(max_entries=1000)
+
+# What actually arrived, newest last. Purely diagnostic: when you are wiring a
+# gateway up, the question you cannot otherwise answer is "did anything reach me
+# at all, and was it signed correctly?" -- stdout scrolls away, this does not.
+#
+# Bounded, in memory, and never persisted. It holds payer UPI addresses, so it
+# is a localhost diagnostic and nothing more.
+WEBHOOK_LOG: deque = deque(maxlen=50)
+WEBHOOK_LOG_LOCK = Lock()
+
+
+def record_webhook(entry: dict) -> None:
+    with WEBHOOK_LOG_LOCK:
+        WEBHOOK_LOG.append(dict(entry, at=time.strftime("%H:%M:%S")))
 
 
 # =============================================================================
@@ -279,6 +314,162 @@ def predict():
         traceback.print_exc()
         return jsonify({"error": "scoring failed",
                         "detail": f"{type(e).__name__}: {e}"}), 500
+
+
+@app.post("/predict/upi")
+def predict_upi():
+    """
+    Score a payment that arrived in UPI's language rather than PaySim's.
+
+    Identical engine, identical thresholds, identical rule layer -- the only
+    thing that differs is the shape of the request. That is the whole point:
+    a payment platform adopts this system by changing an adapter, not a model.
+
+    The response is byte-for-byte the /predict response plus one extra `upi`
+    block saying what the adapter mapped and, importantly, what it had to
+    assume. See upi_adapter.py for why a remitter bank usually cannot see the
+    beneficiary's balance.
+    """
+    started = time.perf_counter()
+    try:
+        payload = request.get_json(force=True, silent=True)
+        if payload is None:
+            return jsonify({"error": "request body must be valid JSON"}), 400
+
+        txn, notes = upi_to_transaction(payload)
+        result = score_one(txn)
+        transaction_id = str(uuid.uuid4())
+        CACHE.put(transaction_id, result)
+
+        latency = 1000 * (time.perf_counter() - started)
+        response = public_view(result, transaction_id, latency)
+        response["upi"] = notes
+        return jsonify(response)
+
+    except ValidationError as e:
+        return jsonify({"error": "invalid UPI payload", "details": e.errors}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": "scoring failed",
+                        "detail": f"{type(e).__name__}: {e}"}), 500
+
+
+@app.post("/webhook/razorpay")
+def webhook_razorpay():
+    """
+    Receive a Razorpay webhook, prove it is genuine, and score it.
+
+    >>> THE ORDER HERE IS THE SECURITY <<<
+    Verify the signature FIRST, against the raw bytes, before parsing anything.
+    Everything after the signature check treats the body as trusted; everything
+    before it must treat the body as hostile.
+
+    Status codes are chosen for how a gateway reacts to them:
+      401  bad or missing signature  -- never acknowledged, never retried by us
+      400  genuine but unmappable    -- do not ask Razorpay to retry a payload
+                                        that will fail identically forever
+      200  scored, or a duplicate    -- acknowledged so retries stop
+    """
+    started = time.perf_counter()
+
+    raw = request.get_data()
+    signature = request.headers.get("X-Razorpay-Signature")
+
+    if not RAZORPAY_WEBHOOK_SECRET:
+        # Refusing to run beats running without authentication.
+        return jsonify({
+            "error": "webhook not configured",
+            "detail": "RAZORPAY_WEBHOOK_SECRET is unset, so signatures cannot "
+                      "be verified and every request is refused.",
+        }), 503
+
+    if not verify_signature(raw, signature, RAZORPAY_WEBHOOK_SECRET):
+        record_webhook({
+            "outcome": "REJECTED",
+            "reason": "signature verification failed",
+            "signature_present": bool(signature),
+            "bytes": len(raw),
+        })
+        return jsonify({"error": "signature verification failed"}), 401
+
+    try:
+        event = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return jsonify({"error": "body must be valid JSON"}), 400
+
+    try:
+        upi_payload, notes = razorpay_to_upi(event, MERCHANT_VPA)
+
+        # Replay: answer with the verdict we already reached, and do NOT let the
+        # payment enter the account history a second time.
+        payment_id = notes.get("razorpay_payment_id")
+        if payment_id:
+            previous = WEBHOOK_SEEN.get(payment_id)
+            if previous is not None:
+                return jsonify(dict(previous, duplicate=True)), 200
+
+        txn, upi_notes = upi_to_transaction(upi_payload)
+        result = score_one(txn)
+        transaction_id = str(uuid.uuid4())
+        CACHE.put(transaction_id, result)
+
+        latency = 1000 * (time.perf_counter() - started)
+        response = public_view(result, transaction_id, latency)
+        response["upi"] = upi_notes
+        response["razorpay"] = notes
+
+        # An observation is not a decision. Say so in the response rather than
+        # letting a caller mistake a post-hoc report for an authorisation.
+        response["enforceable"] = notes["decidable"]
+        if not notes["decidable"]:
+            response["decision_note"] = (
+                f"'{notes['event']}' is not the authorisation moment, so this "
+                f"verdict is a report. Only '{DECIDABLE_EVENT}' can be acted on."
+            )
+
+        record_webhook({
+            "outcome": "SCORED",
+            "event": notes["event"],
+            "payment_id": payment_id,
+            "amount_rupees": notes["amount_rupees"],
+            "payer_vpa": notes["payer_vpa"],
+            "decision": result["decision"],
+            "fraud_score": result["fraud_score"],
+            "enforceable": notes["decidable"],
+        })
+
+        if payment_id:
+            WEBHOOK_SEEN.put(payment_id, response)
+        return jsonify(response), 200
+
+    except ValidationError as e:
+        record_webhook({"outcome": "UNMAPPABLE", "details": e.errors})
+        return jsonify({"error": "unmappable webhook", "details": e.errors}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": "scoring failed",
+                        "detail": f"{type(e).__name__}: {e}"}), 500
+
+
+@app.get("/webhook/razorpay/recent")
+def webhook_recent():
+    """
+    What has actually arrived on the webhook, newest last.
+
+    The first question when wiring a gateway is never "what score did it get" --
+    it is "did anything reach me, and was it signed correctly?" A 401 here with
+    `signature_present: true` means the secret is wrong; nothing at all means
+    the tunnel or the dashboard URL is wrong. Those are different problems and
+    this is how you tell them apart.
+    """
+    with WEBHOOK_LOG_LOCK:
+        events = list(WEBHOOK_LOG)
+    return jsonify({
+        "configured": bool(RAZORPAY_WEBHOOK_SECRET),
+        "merchant_vpa": MERCHANT_VPA,
+        "received": len(events),
+        "events": events,
+    })
 
 
 @app.post("/explain")
