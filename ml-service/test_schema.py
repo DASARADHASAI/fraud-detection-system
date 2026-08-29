@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import sys
 
+import pandas as pd
+
 import schema
 
 failures: list[str] = []
@@ -67,6 +69,57 @@ def a_rejections() -> None:
             "a required field mapped to null is refused", "amount")
 
 
+def _sparkov_like() -> pd.DataFrame:
+    """A frame shaped like a real non-PaySim dataset: no balance columns."""
+    return pd.DataFrame({
+        "hour": [1, 2, 3],
+        "category": ["PAYMENT", "TRANSFER", "PAYMENT"],
+        "amt": ["100.50", "250.00", "75.25"],
+        "cc_num": ["C1", "C2", "C1"],
+        "merchant": ["M1", "M1", "M2"],
+        "is_fraud": [0, 1, 0],
+    })
+
+
+SPARKOV_MAP = {
+    "schema": {
+        "step": "hour", "type": "category", "amount": "amt",
+        "nameOrig": "cc_num", "nameDest": "merchant", "isFraud": "is_fraud",
+        "oldbalanceOrg": None, "newbalanceOrig": None,
+        "oldbalanceDest": None, "newbalanceDest": None,
+    }
+}
+
+
+def b_normalise_renames() -> None:
+    print("\n4. normalize() renames to canonical names")
+    mapping = schema.load_mapping(SPARKOV_MAP)
+    out, report = schema.normalize(_sparkov_like(), mapping)
+    for field in ["step", "type", "amount", "nameOrig", "nameDest", "isFraud"]:
+        check(field in out.columns, f"'{field}' exists after normalisation")
+    check("amt" not in out.columns, "the original 'amt' name is gone")
+    check(out["amount"].dtype.kind == "f",
+          "amount was coerced from string to float",
+          f"dtype is {out['amount'].dtype}")
+    check(sorted(report.absent) == sorted(schema.OPTIONAL_CANONICAL),
+          "all four balance columns are reported absent", str(report.absent))
+    check("amount" in report.mapped, "the report lists what WAS supplied")
+
+
+def b_normalise_requires() -> None:
+    print("\n5. A missing REQUIRED column is refused")
+    df = _sparkov_like().drop(columns=["amt"])
+    mapping = schema.load_mapping(SPARKOV_MAP)
+    try:
+        schema.normalize(df, mapping)
+    except schema.SchemaError as e:
+        joined = "; ".join(e.errors)
+        check("amt" in joined, "the error names the missing SOURCE column", joined)
+        check("amount" in joined, "the error names the canonical field too", joined)
+    else:
+        check(False, "a missing required column must raise SchemaError")
+
+
 def main() -> int:
     print("=" * 70)
     print("SCHEMA -- the data boundary")
@@ -74,6 +127,8 @@ def main() -> int:
     a_identity_default()
     a_explicit_mapping()
     a_rejections()
+    b_normalise_renames()
+    b_normalise_requires()
 
     print("\n" + "=" * 70)
     if failures:

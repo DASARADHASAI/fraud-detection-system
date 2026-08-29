@@ -24,6 +24,8 @@ column it guessed at.
 
 from __future__ import annotations
 
+import pandas as pd
+
 
 class SchemaError(ValueError):
     """Raised when the column mapping cannot be used. Carries every problem
@@ -101,3 +103,54 @@ def load_mapping(cfg: dict) -> dict[str, str]:
     if errors:
         raise SchemaError(errors)
     return mapping
+
+
+class CapabilityReport:
+    """What the supplied data can and cannot support. Grows across Tasks 3 and 6."""
+
+    def __init__(self, mapped: list[str], absent: list[str]) -> None:
+        self.mapped = mapped
+        self.absent = absent
+        self.groups: dict[str, bool] = {}          # filled by the resolver, Task 6
+        self.active_feature_count: int = 0         # filled by the resolver, Task 6
+
+
+def normalize(df: pd.DataFrame, mapping: dict[str, str]):
+    """
+    Rename the user's columns to canonical names, coerce numerics, and report
+    which optional fields were not supplied.
+
+    Returns (renamed_frame, CapabilityReport).
+
+    >>> WHY THE ERROR NAMES BOTH NAMES <<<
+    A user reading "missing column 'amount'" will search their CSV for
+    "amount", not find it, and be stuck -- because in THEIR file it is called
+    "amt". The error has to speak both vocabularies.
+    """
+    errors: list[str] = []
+    present = set(df.columns)
+
+    for field in REQUIRED_CANONICAL:
+        source = mapping[field]
+        if source not in present:
+            errors.append(
+                f"required field '{field}' is mapped to column '{source}', "
+                f"which is not in the file. Columns found: {sorted(present)}"
+            )
+    if errors:
+        raise SchemaError(errors)
+
+    rename = {mapping[f]: f for f in mapping if mapping[f] in present}
+    out = df.rename(columns=rename).copy()
+
+    absent = [f for f in CANONICAL_FIELDS
+              if f not in mapping or mapping[f] not in present]
+
+    for field in NUMERIC_CANONICAL:
+        if field in out.columns:
+            # errors="coerce" turns unparseable junk into NaN rather than
+            # throwing. NaN is then visible and testable; a silent string is not.
+            out[field] = pd.to_numeric(out[field], errors="coerce").astype(float)
+
+    mapped = [f for f in CANONICAL_FIELDS if f not in absent]
+    return out, CapabilityReport(mapped=mapped, absent=absent)
