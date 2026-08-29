@@ -22,6 +22,36 @@ paths:
   results_file: "../docs/results.md"         # Evaluation metrics get written here
 
 # ----------------------------------------------------------------------------
+# Phase 14 -- COLUMN MAPPING. Which of YOUR columns mean what.
+#
+# Left as-is, every field maps to itself, which is exactly PaySim -- so a PaySim
+# file needs no changes here at all.
+#
+# To use your own data, put YOUR column name on the right:
+#     amount: amt
+#     nameOrig: cc_num
+#     nameDest: merchant
+#
+# `step` may be an integer hour index OR a timestamp column; a timestamp is
+# converted to hours-since-the-earliest-row automatically.
+#
+# Set a balance field to `null` if your data does not have it. The system will
+# encode it as "not recorded" and TELL YOU what that costs, rather than quietly
+# training a weaker model.
+# ----------------------------------------------------------------------------
+schema:
+  step: step
+  type: type
+  amount: amount
+  nameOrig: nameOrig
+  nameDest: nameDest
+  oldbalanceOrg: oldbalanceOrg
+  newbalanceOrig: newbalanceOrig
+  oldbalanceDest: oldbalanceDest
+  newbalanceDest: newbalanceDest
+  isFraud: isFraud
+
+# ----------------------------------------------------------------------------
 # Phase 1 -- Data loading and feature engineering
 # ----------------------------------------------------------------------------
 data:

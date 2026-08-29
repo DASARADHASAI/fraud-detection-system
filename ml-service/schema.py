@@ -201,8 +201,12 @@ def normalize(df: pd.DataFrame, mapping: dict[str, str]):
     if errors:
         raise SchemaError(errors)
 
+    # No .copy() here on purpose. pandas 3 is copy-on-write, so rename()
+    # already returns an independent object and the later column assignments
+    # copy only the column they touch. An explicit .copy() would deep-copy a
+    # 6.3M-row frame for nothing.
     rename = {mapping[f]: f for f in mapping if mapping[f] in present}
-    out = df.rename(columns=rename).copy()
+    out = df.rename(columns=rename)
     out = _coerce_step(out)
 
     absent = [f for f in CANONICAL_FIELDS

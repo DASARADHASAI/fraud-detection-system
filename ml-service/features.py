@@ -37,6 +37,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+import schema
 import yaml
 
 
@@ -82,10 +84,11 @@ def resolve_path(cfg: dict, relative_path: str) -> Path:
 # The exact columns PaySim ships with. We check for these so that a wrong or
 # corrupted download fails immediately with a clear message, instead of
 # producing a broken model 20 minutes later.
-PAYSIM_COLUMNS = [
-    "step", "type", "amount", "nameOrig", "oldbalanceOrg", "newbalanceOrig",
-    "nameDest", "oldbalanceDest", "newbalanceDest", "isFraud", "isFlaggedFraud",
-]
+# Set by load_raw_data so train_model.py can print and persist the report
+# without threading a return value through four call sites. schema.py now owns
+# the canonical column vocabulary -- two sources of truth for a column list is
+# exactly how they drift apart.
+LAST_CAPABILITY_REPORT = None
 
 # PaySim's five transaction types. We fix the order so that the one-hot
 # columns are always identical between training and live prediction.
@@ -113,14 +116,13 @@ def load_raw_data(cfg: dict) -> pd.DataFrame:
     print(f"Reading CSV from: {csv_path}")
     df = pd.read_csv(csv_path)
 
-    # --- Sanity check: are the columns the ones we expect? ---
-    missing = [c for c in PAYSIM_COLUMNS if c not in df.columns]
-    if missing:
-        raise ValueError(
-            f"The CSV is missing expected PaySim columns: {missing}\n"
-            f"Columns actually found: {list(df.columns)}\n"
-            "You may have downloaded a different fraud dataset."
-        )
+    # --- The data boundary: rename THEIR columns to OUR canonical names. ---
+    # Everything downstream speaks canonical names only and never learns that
+    # the file called them something else. See schema.py.
+    global LAST_CAPABILITY_REPORT
+    mapping = schema.load_mapping(cfg)
+    df, LAST_CAPABILITY_REPORT = schema.normalize(df, mapping)
+    print(LAST_CAPABILITY_REPORT.render())
 
     print(f"Full file loaded: {df.shape[0]:,} rows x {df.shape[1]} columns")
 

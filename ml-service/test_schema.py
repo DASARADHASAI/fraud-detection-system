@@ -189,6 +189,45 @@ def d_unparseable_step() -> None:
         check(False, "an unparseable step must raise SchemaError")
 
 
+def e_identity_is_paysim() -> None:
+    print("\n8. The default config is an identity mapping (PaySim unchanged)")
+    import features
+    cfg = features.load_config()
+    mapping = schema.load_mapping(cfg)
+    for field in schema.CANONICAL_FIELDS:
+        check(mapping[field] == field,
+              f"default config maps {field} to itself", mapping.get(field))
+    check(hasattr(features, "LAST_CAPABILITY_REPORT"),
+          "features exposes LAST_CAPABILITY_REPORT for the training report")
+
+
+def e_paysim_frame_survives() -> None:
+    print("\n8b. A PaySim-shaped frame passes through unchanged")
+    paysim = pd.DataFrame({
+        "step": [1, 2],
+        "type": ["TRANSFER", "CASH_OUT"],
+        "amount": [1000.0, 2000.0],
+        "nameOrig": ["C1", "C2"],
+        "oldbalanceOrg": [5000.0, 3000.0],
+        "newbalanceOrig": [4000.0, 1000.0],
+        "nameDest": ["D1", "D2"],
+        "oldbalanceDest": [0.0, 100.0],
+        "newbalanceDest": [1000.0, 2100.0],
+        "isFraud": [0, 1],
+        "isFlaggedFraud": [0, 0],
+    })
+    out, report = schema.normalize(paysim, schema.load_mapping({}))
+
+    check(report.absent == [], "nothing is reported absent", str(report.absent))
+    check("isFlaggedFraud" in out.columns,
+          "the leaky column survives normalisation so drop_columns can remove it")
+    check(out["step"].tolist() == [1, 2], "step is untouched")
+    check(out["oldbalanceOrg"].tolist() == [5000.0, 3000.0],
+          "real balances are not overwritten by the zero encoding")
+    check(len(out) == 2 and len(out.columns) == 11,
+          "shape is unchanged", f"{out.shape}")
+
+
 def main() -> int:
     print("=" * 70)
     print("SCHEMA -- the data boundary")
@@ -202,6 +241,8 @@ def main() -> int:
     d_derived_step()
     d_integer_step_untouched()
     d_unparseable_step()
+    e_identity_is_paysim()
+    e_paysim_frame_survives()
 
     print("\n" + "=" * 70)
     if failures:
