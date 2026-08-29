@@ -142,6 +142,53 @@ def c_absent_balances() -> None:
           "the rendered report names each absent field")
 
 
+def d_derived_step() -> None:
+    print("\n7. step can be derived from a timestamp column")
+    df = pd.DataFrame({
+        "ts": ["2026-01-01 00:30:00", "2026-01-01 02:30:00", "2026-01-02 00:30:00"],
+        "category": ["PAYMENT", "TRANSFER", "PAYMENT"],
+        "amt": [10.0, 20.0, 30.0],
+        "cc_num": ["C1", "C2", "C1"],
+        "merchant": ["M1", "M1", "M2"],
+    })
+    cfg = {"schema": {
+        "step": "ts", "type": "category", "amount": "amt",
+        "nameOrig": "cc_num", "nameDest": "merchant", "isFraud": None,
+        "oldbalanceOrg": None, "newbalanceOrig": None,
+        "oldbalanceDest": None, "newbalanceDest": None,
+    }}
+    out, _ = schema.normalize(df, schema.load_mapping(cfg))
+
+    check(out["step"].dtype.kind in "iu", "step is an integer",
+          f"dtype is {out['step'].dtype}")
+    steps = out["step"].tolist()
+    check(steps[0] == 1, "the earliest row is step 1", str(steps))
+    check(steps[1] == 3, "two hours later is step 3", str(steps))
+    check(steps[2] == 25, "the next day is step 25", str(steps))
+
+
+def d_integer_step_untouched() -> None:
+    print("\n7b. An integer step is left exactly as it is")
+    mapping = schema.load_mapping(SPARKOV_MAP)
+    out, _ = schema.normalize(_sparkov_like(), mapping)
+    check(out["step"].tolist() == [1, 2, 3],
+          "an already-integer hour index is not rebased", str(out["step"].tolist()))
+
+
+def d_unparseable_step() -> None:
+    print("\n7c. A step that is neither integer nor timestamp is refused")
+    df = _sparkov_like()
+    df["hour"] = ["not a time", "nonsense", "junk"]
+    mapping = schema.load_mapping(SPARKOV_MAP)
+    try:
+        schema.normalize(df, mapping)
+    except schema.SchemaError as e:
+        joined = "; ".join(e.errors)
+        check("step" in joined, "the error names step", joined)
+    else:
+        check(False, "an unparseable step must raise SchemaError")
+
+
 def main() -> int:
     print("=" * 70)
     print("SCHEMA -- the data boundary")
@@ -152,6 +199,9 @@ def main() -> int:
     b_normalise_renames()
     b_normalise_requires()
     c_absent_balances()
+    d_derived_step()
+    d_integer_step_untouched()
+    d_unparseable_step()
 
     print("\n" + "=" * 70)
     if failures:

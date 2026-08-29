@@ -152,6 +152,30 @@ class CapabilityReport:
         return "\n".join(lines)
 
 
+def _coerce_step(out: pd.DataFrame) -> pd.DataFrame:
+    """
+    `step` is an integer hour index -- PaySim's unit, and what the velocity
+    windows and the rule layer count in.
+
+    Most real datasets have a timestamp instead. Convert it to hours since the
+    earliest row, 1-based so that the first hour is step 1 exactly as PaySim
+    numbers it. Leave an already-integer column alone.
+    """
+    if out["step"].dtype.kind in "iu":
+        return out
+
+    as_time = pd.to_datetime(out["step"], errors="coerce")
+    if as_time.isna().all():
+        raise SchemaError([
+            "'step' is neither an integer hour index nor a parseable timestamp. "
+            f"Sample value: {out['step'].iloc[0]!r}"
+        ])
+
+    hours = (as_time - as_time.min()).dt.total_seconds() // 3600
+    out["step"] = (hours + 1).astype("int64")
+    return out
+
+
 def normalize(df: pd.DataFrame, mapping: dict[str, str]):
     """
     Rename the user's columns to canonical names, coerce numerics, and report
@@ -179,6 +203,7 @@ def normalize(df: pd.DataFrame, mapping: dict[str, str]):
 
     rename = {mapping[f]: f for f in mapping if mapping[f] in present}
     out = df.rename(columns=rename).copy()
+    out = _coerce_step(out)
 
     absent = [f for f in CANONICAL_FIELDS
               if f not in mapping or mapping[f] not in present]
