@@ -286,6 +286,39 @@ def f_feature_groups() -> None:
           str(len(resolved)))
 
 
+def g_group_d_phrases() -> None:
+    print("\n10. Every group D feature can be explained in words")
+    import features
+    from explain import PHRASE_BUILDERS
+
+    group_d = features.FEATURE_GROUPS["D sender behaviour"]
+
+    for feat in group_d:
+        check(feat in PHRASE_BUILDERS, f"'{feat}' has a phrase builder")
+
+    for feat in group_d:
+        if feat not in PHRASE_BUILDERS:
+            continue
+        # Exercise both branches: a large value and a zero.
+        for value in (3.0, 0.0):
+            text = PHRASE_BUILDERS[feat](value)
+            check(isinstance(text, str) and len(text) > 10,
+                  f"'{feat}' reads as a sentence at value {value}", repr(text))
+            check(not text.endswith("."),
+                  f"'{feat}' has no trailing full stop at value {value}, "
+                  f"matching the other 28", repr(text))
+
+    # The real guard: turning group D on must not produce a feature the
+    # explanation layer cannot describe. That is what test_explain.py:57
+    # enforces for MODEL_FEATURES, and it must hold for the 35-feature set too.
+    every = schema.CapabilityReport(mapped=list(schema.CANONICAL_FIELDS), absent=[])
+    full = features.resolve_features(every, enable_sender_group=True)
+    missing = [f for f in full if f not in PHRASE_BUILDERS]
+    check(not missing,
+          "every feature in the FULL 35-feature set can be explained", str(missing))
+    check(len(full) == 35, "the full set is 35 features", str(len(full)))
+
+
 def main() -> int:
     print("=" * 70)
     print("SCHEMA -- the data boundary")
@@ -302,6 +335,7 @@ def main() -> int:
     e_identity_is_paysim()
     e_paysim_frame_survives()
     f_feature_groups()
+    g_group_d_phrases()
 
     print("\n" + "=" * 70)
     if failures:

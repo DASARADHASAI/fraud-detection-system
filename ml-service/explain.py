@@ -139,6 +139,47 @@ PHRASE_BUILDERS = {
         "the money is going to a receiver never used before"
         if v >= 0.5 else "this receiver has been paid before"
     ),
+
+    # --- Group D: the SENDER's own behaviour (Phase 14) ---------------------
+    #
+    # Off on PaySim, where 99.85% of senders appear exactly once. Live, and on
+    # any dataset with repeat customers, these are among the most intuitive
+    # reasons a person can be given -- they compare someone against THEMSELVES
+    # rather than against a population, which is the difference between "this
+    # is unusual for you" and "this is unusual for somebody".
+    "user_txn_count": lambda v: (
+        f"this customer has {int(v)} earlier transactions on record"
+        if v >= 1 else "this customer has no earlier transactions on record"
+    ),
+    "user_mean_amount": lambda v: (
+        f"this customer's payments usually run around {_money(v)}"
+        if v > 0 else "this customer has no established typical amount yet"
+    ),
+    "user_std_amount": lambda v: (
+        f"this customer's payment amounts typically vary by about {_money(v)}"
+        if v >= 1 else
+        "this customer's payment amounts are usually very consistent"
+    ),
+    "user_has_thin_history": lambda v: (
+        "this customer has almost no history yet, so their normal is not "
+        "established"
+        if v >= 0.5 else
+        "this customer has enough history to judge what is normal for them"
+    ),
+    "user_amount_deviation": lambda v: (
+        f"the amount is {v:.1f} standard deviations above this customer's own "
+        f"normal"
+        if v > 0 else "the amount is within this customer's own normal range"
+    ),
+    "user_amount_ratio": lambda v: (
+        f"the amount is {v:.1f} times this customer's usual payment"
+        if v > 1 else
+        "the amount is no larger than this customer's usual payment"
+    ),
+    "user_velocity_count": lambda v: (
+        f"this customer made {int(v)} other transactions in the recent window"
+        if v >= 1 else "this customer has made no other recent transactions"
+    ),
     "dest_txn_count": lambda v: (
         f"this receiving account has been used {int(v)} times before"
         if v > 0 else "this receiving account has never been seen before"
