@@ -428,9 +428,147 @@ button.send:hover .arrow { transform: translateX(4px); }
   .stamp-in { animation: none; }
   *, *::before { transition: none !important; }
 }
+
+/* ==========================================================================
+   PHASE 15 -- THE DESK AS AN INSTRUMENT
+   --------------------------------------------------------------------------
+   Two ideas borrowed from the references, and one rejected.
+
+   BORROWED (SignalIQ): the raw material is the wallpaper. They tile the UPI
+   narrations their parser reads; we tile the traffic this desk decides on. It
+   is built from the live feed, never from filler -- if it were invented text
+   it would be decoration, and this project does not decorate with fiction.
+
+   BORROWED (SignalIQ): pin the artifact, spotlight one piece of evidence at a
+   time, dim the rest. Their version is scrubbed by scroll. Ours is driven by
+   the decision, because a desk that waits for you to scroll before it tells
+   you why it blocked a payment is a worse desk.
+
+   REJECTED: scroll-jacking, the OS metaphor, dithered assets. A live desk
+   must never make you wait for an animation to find out what it decided.
+   ========================================================================== */
+
+@keyframes ascii-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 0.038; transform: none; }
+}
+#wallpaper {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none; user-select: none;
+  overflow: hidden; white-space: pre; word-break: break-all;
+  font-family: var(--mono); font-size: 10px; line-height: 1.6;
+  letter-spacing: 0.02em; color: var(--white); opacity: 0.038;
+  animation: ascii-in 1.2s ease-out forwards;
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 42%, transparent 92%);
+          mask-image: linear-gradient(180deg, #000 0%, #000 42%, transparent 92%);
+}
+.masthead, main { position: relative; z-index: 1; }
+
+/* --- crop marks. Two diagonal corners, not four: the fourth and third add
+       busyness without adding meaning. ------------------------------------ */
+@keyframes caret-blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+.caret {
+  display: inline-block; width: 8px; height: 15px; margin-left: 3px;
+  background: var(--green); vertical-align: -2px;
+  animation: caret-blink 0.7s steps(2) infinite;
+}
+@media (prefers-reduced-motion: reduce) { .caret { animation: none; } }
+
+.cropped {
+  position: relative; display: inline-flex; align-items: center; gap: 11px;
+  padding: 7px 13px;
+}
+.cropped::before, .cropped::after {
+  content: ''; position: absolute; width: 7px; height: 7px;
+  border-color: var(--line-2); border-style: solid;
+}
+.cropped::before { top: 0; left: 0;     border-width: 1px 0 0 1px; }
+.cropped::after  { bottom: 0; right: 0; border-width: 0 1px 1px 0; }
+
+/* --- the score track. The two thresholds are gates you can see. ---------- */
+.instrument { margin-top: 22px; }
+.track-row { display: flex; align-items: flex-end; gap: 22px; }
+.score-num {
+  font-family: var(--mono); font-size: 38px; font-weight: 600;
+  letter-spacing: -0.03em; font-variant-numeric: tabular-nums;
+  line-height: 1; color: var(--white);
+}
+.score-cap {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--grey-2); margin-bottom: 5px;
+}
+.track {
+  position: relative; height: 3px; margin: 20px 0 0;
+  background: var(--line); border-radius: 2px;
+}
+.track-fill {
+  position: absolute; inset: 0 auto 0 0; width: 0; border-radius: 2px;
+  background: var(--line-2);
+  transition: width 640ms cubic-bezier(0.22, 0.9, 0.26, 1), background 240ms;
+}
+.is-approve .track-fill { background: var(--green); }
+.is-ask     .track-fill { background: var(--violet); }
+.is-block   .track-fill { background: var(--red); }
+.gate { position: absolute; top: -6px; width: 1px; height: 15px; background: var(--line-2); }
+.gate span {
+  position: absolute; top: 19px; left: 50%; transform: translateX(-50%);
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em; color: var(--grey-2);
+}
+.needle {
+  position: absolute; top: -8px; left: 0; width: 2px; height: 19px;
+  background: var(--white); border-radius: 1px;
+  transition: left 640ms cubic-bezier(0.22, 0.9, 0.26, 1);
+}
+.bands {
+  display: flex; margin-top: 34px;
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--grey-2);
+}
+.band { text-align: center; padding-top: 7px; border-top: 1px solid var(--line); }
+.band.on { color: var(--white); border-top-color: currentColor; }
+.is-approve .band.on { color: var(--green); }
+.is-ask     .band.on { color: var(--violet); }
+.is-block   .band.on { color: var(--red); }
+
+/* --- the evidence. One item lit at a time, the rest held back. ----------- */
+.evidence { margin-top: 26px; border-top: 1px solid var(--line); padding-top: 15px; }
+.ev-head { margin-bottom: 4px; }
+.ev-head b {
+  font-family: var(--mono); font-size: 9.5px; font-weight: 600;
+  letter-spacing: 0.18em; text-transform: uppercase; color: var(--grey-2);
+}
+.ev {
+  display: grid; grid-template-columns: 24px 1fr; gap: 13px; align-items: start;
+  padding: 9px 13px; margin: 0 -13px; border-radius: 4px;
+  opacity: 0; transform: translateY(4px);
+  animation: ev-in 300ms ease-out forwards;
+  transition: opacity 400ms ease-out, background 600ms ease-out;
+}
+@keyframes ev-in { to { opacity: 0.5; transform: none; } }
+.ev.lit { opacity: 1; background: var(--panel-2); }
+.ev-n {
+  font-family: var(--mono); font-size: 10px; color: var(--grey-2);
+  padding-top: 3px; font-variant-numeric: tabular-nums;
+}
+.ev.lit .ev-n { color: var(--white); }
+.ev-t { font-size: 14.5px; line-height: 1.5; color: var(--grey); }
+.ev.lit .ev-t { color: var(--white); }
+
+/* The quality floor: anyone who has asked not to be moved, is not moved. */
+@media (prefers-reduced-motion: reduce) {
+  .ev { animation: none; opacity: 0.5; transform: none; }
+  .ev.lit { opacity: 1; }
+  .track-fill, .needle { transition: none; }
+}
+
+@media (max-width: 700px) {
+  .score-num { font-size: 30px; }
+  .track-row { gap: 14px; }
+}
 </style>
 </head>
 <body>
+
+<div id="wallpaper" aria-hidden="true"></div>
 
 <div class="masthead">
   <h1>Fraud<em>Desk</em></h1>
@@ -446,16 +584,20 @@ button.send:hover .arrow { transform: translateX(4px); }
 <main>
 
   <section class="verdict" id="verdict">
-    <div class="thesis">
-      <span class="label">The idea</span>
-      <h2>A decision, and the <em>reason</em>, every time.</h2>
-      <p>Send a payment or fire a test scenario. The decision lands here with
-         the reason it was made — written for the customer, not for a data
-         scientist.</p>
-      <div class="outcomes">
-        <span class="outcome"><i class="swatch" style="background:var(--green)"></i>Approve</span>
-        <span class="outcome"><i class="swatch" style="background:var(--violet)"></i>Ask the customer</span>
-        <span class="outcome"><i class="swatch" style="background:var(--red)"></i>Block</span>
+    <span class="label">The desk</span>
+    <p class="verdict-because" style="margin-top:9px">Send a payment or fire a scenario.
+       The score lands on the track below, and the evidence behind it assembles
+       underneath — strongest first.<i class="caret"></i></p>
+    <div class="instrument">
+      <div class="track">
+        <div class="track-fill"></div>
+        <div class="gate" style="left:35%"><span>0.35</span></div>
+        <div class="gate" style="left:75%"><span>0.75</span></div>
+      </div>
+      <div class="bands">
+        <div class="band" style="flex:35">Approve</div>
+        <div class="band" style="flex:40">Ask the customer</div>
+        <div class="band" style="flex:25">Block</div>
       </div>
     </div>
   </section>
@@ -628,14 +770,63 @@ function previewTravel() {
 const CLASS_FOR = { APPROVE:'is-approve', OTP_CONFIRM:'is-ask', BLOCK:'is-block' };
 const WORD_FOR  = { APPROVE:'Approved', OTP_CONFIRM:'Asking the customer', BLOCK:'Blocked' };
 
+const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* Count a number up rather than printing it. Borrowed from SignalIQ's
+   percentage counter -- and it is honest here for the same reason their bar is:
+   the score is a magnitude, and watching it travel tells you how close to a
+   gate it landed, which the final digits alone never do. */
+function countTo(node, target, ms) {
+  if (REDUCED) { node.textContent = target.toFixed(3); return; }
+  const t0 = performance.now();
+  (function frame(now) {
+    const k = Math.min(1, (now - t0) / ms);
+    const eased = 1 - Math.pow(1 - k, 3);
+    node.textContent = (target * eased).toFixed(3);
+    if (k < 1) requestAnimationFrame(frame);
+  })(t0);
+}
+
+/* Walk the evidence: one item lit, the rest held back, exactly as SignalIQ
+   spotlights one statement row. Theirs is scrubbed by scroll; ours is driven
+   by the decision, and ends on the strongest reason rather than the last. */
+function walkEvidence(items) {
+  if (!items.length) return;
+  const STEP = REDUCED ? 0 : 150;
+  items.forEach((node, i) => {
+    node.style.animationDelay = (i * STEP) + 'ms';
+    setTimeout(() => {
+      items.forEach(n => n.classList.remove('lit'));
+      node.classList.add('lit');
+    }, i * STEP + 120);
+  });
+  setTimeout(() => {
+    items.forEach(n => n.classList.remove('lit'));
+    items[0].classList.add('lit');
+  }, items.length * STEP + 520);
+}
+
 function renderVerdict(r) {
   const slab = el('verdict');
-  const trace = [{ text:`model ${(r.fraudScore ?? 0).toFixed(3)}` }];
+  const trace = [];
+  if (r.modelDecision && r.modelDecision !== r.decision)
+    trace.push({ text: 'model said ' + r.modelDecision.replace('_', ' ') });
   if (r.modelsDisagree) trace.push({ text:'models disagreed' });
   if (r.ruleApplied) trace.push({ text:'rule · ' + r.ruleApplied });
   if (r.quickSignalApplied) trace.push({ text:'signal · ' + r.quickSignalApplied });
   if (r.otp) trace.push({ text:'otp sent' });
   if (r.degradedMode) trace.push({ text:'degraded' });
+
+  const score = r.fraudScore ?? 0;
+  const pct = Math.max(0, Math.min(100, score * 100));
+  const reasons = (r.reasons || []).slice(0, 5);
+  /* The lit band follows the DECISION, not the score. A rule or a quick signal
+     can move a payment out of the band its score fell in -- R6 scores 0.295,
+     which is Approve territory, and is still sent to the customer. Lighting
+     the band the score landed in would contradict the word above it. The
+     needle stays where the model actually put it, so when the two disagree you
+     can see the override happen, and the trace says who did it. */
+  const band = { APPROVE: 0, OTP_CONFIRM: 1, BLOCK: 2 }[r.decision] ?? 1;
 
   slab.className = 'verdict stamp-in ' + CLASS_FOR[r.decision];
   slab.innerHTML = `
@@ -644,13 +835,75 @@ function renderVerdict(r) {
     <p class="verdict-because">${escapeHtml(r.explanation || '')}</p>
     <div class="trace">${trace.map(t =>
       `<span class="trace-step fired">${escapeHtml(t.text)}</span>`).join('')}</div>
+
+    <div class="instrument">
+      <div class="track-row">
+        <div><div class="score-cap">Fraud score</div>
+             <div class="score-num" id="score-num">0.000</div></div>
+      </div>
+      <div class="track">
+        <div class="track-fill" id="track-fill"></div>
+        <div class="gate" style="left:35%"><span>0.35</span></div>
+        <div class="gate" style="left:75%"><span>0.75</span></div>
+        <div class="needle" id="needle"></div>
+      </div>
+      <div class="bands">
+        <div class="band${band===0?' on':''}" style="flex:35">Approve</div>
+        <div class="band${band===1?' on':''}" style="flex:40">Ask the customer</div>
+        <div class="band${band===2?' on':''}" style="flex:25">Block</div>
+      </div>
+    </div>
+
+    ${reasons.length ? `<div class="evidence">
+      <div class="ev-head cropped"><b>The evidence</b></div>
+      ${reasons.map((t, i) => `<div class="ev">
+         <span class="ev-n">${String(i + 1).padStart(2, '0')}</span>
+         <span class="ev-t">${escapeHtml(t)}</span></div>`).join('')}
+    </div>` : ''}
+
     <div class="verdict-meta">
       <span>amount <b>${money(r._amount)}</b></span>
       <span>${escapeHtml(r._from)} → ${escapeHtml(r._to)}</span>
-      <span>score <b>${(r.fraudScore ?? 0).toFixed(4)}</b></span>
       <span>decided in <b>${r.processingMillis ?? '?'} ms</b></span>
     </div>`;
   slab.offsetWidth;
+
+  /* Next frame, so the transition has a 0 to travel from. */
+  requestAnimationFrame(() => {
+    el('track-fill').style.width = pct + '%';
+    el('needle').style.left = pct + '%';
+  });
+  countTo(el('score-num'), score, 640);
+  walkEvidence([...slab.querySelectorAll('.ev')]);
+}
+
+/* The wallpaper is the traffic this desk has actually decided on -- type,
+   both accounts, amount, score, verdict. Never filler text: invented rows
+   behind a fraud console would be decoration made of fiction, and every other
+   number on this page is measured. If nothing has been decided yet, it stays
+   empty rather than pretending. */
+async function paintWallpaper() {
+  const node = el('wallpaper');
+  if (!node) return;
+  let rows = [];
+  try { rows = await fetch(`${API}/transactions?limit=40`).then(r => r.json()); }
+  catch (e) { return; }
+  if (!rows.length) { node.textContent = ''; return; }
+
+  const cells = rows.map(t =>
+    `${t.type}/${t.nameOrig}/${t.nameDest}/${Math.round(t.amount)}/` +
+    `${(t.fraudScore ?? 0).toFixed(4)}/${t.finalDecision}`);
+
+  let line = cells.join('  ') + '  ';
+  while (line.length < 460) line += line;
+  const rowsNeeded = Math.ceil(window.innerHeight / 16) + 4;
+  const out = [];
+  for (let i = 0; i < rowsNeeded; i++) {
+    /* Offset each line so the tiling never forms vertical seams. */
+    const k = (i * 37) % line.length;
+    out.push((line.slice(k) + line.slice(0, k)).slice(0, 460));
+  }
+  node.textContent = out.join('\n');
 }
 
 async function refreshFeed() {
@@ -752,7 +1005,7 @@ function openOtp(result) {
       { method:'POST' }).then(r => r.json());
     renderVerdict({ ...result, decision: res.decision, explanation: res.explanation,
                     otp: null, quickSignalApplied: null });
-    await Promise.all([refreshFeed(), refreshStats()]);
+    await Promise.all([refreshFeed(), refreshStats(), paintWallpaper()]);
   };
   el('otp-yes').onclick = () => answer(true);
   el('otp-no').onclick  = () => answer(false);
@@ -799,7 +1052,7 @@ async function send(payload) {
       if (city) lastSeen[payload.nameOrig] = { city, at: Date.now() };
     }
     renderVerdict(result);
-    await Promise.all([refreshFeed(), refreshStats()]);
+    await Promise.all([refreshFeed(), refreshStats(), paintWallpaper()]);
     if (result.otp) openOtp(result);
     return result;
   } finally { btn.disabled = false; txt.textContent = 'Send payment'; }
@@ -889,6 +1142,8 @@ el('city').innerHTML = CITIES.map(c => `<option>${c.name}</option>`).join('');
 el('city').addEventListener('change', previewTravel);
 el('nameOrig').addEventListener('input', previewTravel);
 renderScenarios(); initChart(); refreshHealth(); refreshFeed(); refreshStats();
+paintWallpaper();
+window.addEventListener('resize', paintWallpaper);
 setInterval(refreshHealth, 15000);
 </script>
 </body>
