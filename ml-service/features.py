@@ -664,52 +664,126 @@ def _count_recent(codes: np.ndarray, steps: np.ndarray, window: int) -> np.ndarr
 # These are the clues handed to the machine learning model, in a FIXED order.
 # Phase 2 (training) and Phase 5 (live prediction) both import this list, which
 # guarantees the live service builds its input in exactly the same shape.
-MODEL_FEATURES = [
-    # Raw transaction facts
-    "amount",
-    "oldbalanceOrg",
-    "newbalanceOrig",
-    "oldbalanceDest",
-    "newbalanceDest",
-    # Balance errors -- the strongest PaySim signal
-    "errorBalanceOrig",
-    "errorBalanceDest",
-    "absErrorBalanceOrig",
-    "absErrorBalanceDest",
-    # Balance pattern flags
-    "orig_account_emptied",
-    "dest_was_empty",
-    "amount_to_balance_ratio",
-    # Transaction type
-    "type_CASH_IN",
-    "type_CASH_OUT",
-    "type_DEBIT",
-    "type_PAYMENT",
-    "type_TRANSFER",
-    "is_risky_type",
-    # Time
-    "hour_of_day",
-    "is_night",
-    # Receiver behavioural profile.
+# =============================================================================
+# FEATURE GROUPS -- what the model gets to see, decided by what the data has.
+#
+# Phase 14. Previously this was one fixed list of 28. It is now four groups,
+# each switched on only when the supplied data can support it, so that a file
+# without balance columns produces an HONESTLY SMALLER model rather than one
+# with eleven silently-constant inputs.
+# =============================================================================
+
+FEATURE_GROUPS = {
+    "A core transaction": [
+        "amount",
+        "type_CASH_IN", "type_CASH_OUT", "type_DEBIT",
+        "type_PAYMENT", "type_TRANSFER",
+        "is_risky_type",
+        "hour_of_day", "is_night",
+    ],
+    "B balance": [
+        "oldbalanceOrg", "newbalanceOrig", "oldbalanceDest", "newbalanceDest",
+        "errorBalanceOrig", "errorBalanceDest",
+        "absErrorBalanceOrig", "absErrorBalanceDest",
+        "orig_account_emptied", "dest_was_empty", "amount_to_balance_ratio",
+    ],
+    "C receiver behaviour": [
+        "dest_txn_count", "dest_mean_amount", "dest_std_amount",
+        "dest_has_thin_history", "dest_amount_deviation", "dest_amount_ratio",
+        "dest_velocity_count", "is_new_receiver",
+    ],
+    # Built by add_account_profiles(prefix="user") and deliberately OFF for
+    # PaySim.
     #
-    # NOTE: the SENDER-side equivalents (user_txn_count, user_mean_amount,
-    # user_amount_deviation, user_velocity_count, ...) are deliberately absent.
-    # We measured PaySim: 99.85% of senders appear exactly once, so on this
-    # dataset those columns are either constant or a rescaled copy of `amount`.
-    # Feeding them in would pad the feature count without adding information,
-    # and worse, `user_amount_deviation` would mean something DIFFERENT at live
-    # time (where customers do have history) than it did during training --
-    # a train/serve mismatch that would silently corrupt live scores.
-    # They are still computed and available for the live explanation layer.
-    "dest_txn_count",
-    "dest_mean_amount",
-    "dest_std_amount",
-    "dest_has_thin_history",
-    "dest_amount_deviation",
-    "dest_amount_ratio",
-    "dest_velocity_count",
-    "is_new_receiver",
+    # NOTE: the SENDER-side features are absent on this dataset for a MEASURED
+    # reason. We counted the full 6,362,620-row file: 99.85% of senders appear
+    # exactly once, so on PaySim these columns are either constant or a rescaled
+    # copy of `amount`. Feeding them in would pad the feature count without
+    # adding information, and worse, `user_amount_deviation` would mean
+    # something DIFFERENT at live time (where customers do have history) than it
+    # did during training -- a train/serve mismatch that would silently corrupt
+    # live scores.
+    #
+    # That reasoning is about the DATA, not about PaySim. On a dataset with
+    # repeat customers the same measurement comes out the other way and this
+    # group is genuinely informative -- which is why it is a gate, not a
+    # deletion. Phase 15's calibrate.py makes that measurement.
+    "D sender behaviour": [
+        "user_txn_count", "user_mean_amount", "user_std_amount",
+        "user_has_thin_history", "user_amount_deviation", "user_amount_ratio",
+        "user_velocity_count",
+    ],
+}
+
+# >>> THE ORDER IS LOAD-BEARING <<<
+# build_feature_matrix() does df[feature_cols], so this list decides the COLUMN
+# ORDER of the matrix the model is trained and scored on. Concatenating the
+# groups above would produce amount/types/time/balances/receiver -- a different
+# order from the model that is on disk today. So the resolver FILTERS this
+# master order instead of concatenating, and the order below is exactly the
+# order the trained model expects.
+CANONICAL_FEATURE_ORDER = [
+    "amount",
+    "oldbalanceOrg", "newbalanceOrig", "oldbalanceDest", "newbalanceDest",
+    "errorBalanceOrig", "errorBalanceDest",
+    "absErrorBalanceOrig", "absErrorBalanceDest",
+    "orig_account_emptied", "dest_was_empty", "amount_to_balance_ratio",
+    "type_CASH_IN", "type_CASH_OUT", "type_DEBIT", "type_PAYMENT",
+    "type_TRANSFER", "is_risky_type",
+    "hour_of_day", "is_night",
+    "dest_txn_count", "dest_mean_amount", "dest_std_amount",
+    "dest_has_thin_history", "dest_amount_deviation", "dest_amount_ratio",
+    "dest_velocity_count", "is_new_receiver",
+    # Group D appends; it is off for PaySim so the first 28 are untouched.
+    "user_txn_count", "user_mean_amount", "user_std_amount",
+    "user_has_thin_history", "user_amount_deviation", "user_amount_ratio",
+    "user_velocity_count",
 ]
+
+
+def resolve_features(report, enable_sender_group: bool = False) -> list[str]:
+    """
+    Decide the active feature list from what the data actually supplied.
+
+    Group B needs ALL FOUR balance columns, not some of them: errorBalanceOrig
+    is oldbalanceOrg - amount - newbalanceOrig, so one missing column makes the
+    whole arithmetic meaningless rather than merely incomplete.
+
+    Group D needs an explicit decision from the caller, because whether sender
+    history means anything is a MEASUREMENT of the data, not a property of the
+    schema. Default off preserves PaySim exactly.
+
+    Records the outcome on the report, so the reason is printed and stored
+    alongside the model rather than living only in someone's memory.
+    """
+    balances_present = not any(
+        f in report.absent for f in schema.OPTIONAL_CANONICAL
+    )
+    active_groups = {
+        "A core transaction": True,
+        "B balance": balances_present,
+        "C receiver behaviour": True,
+        "D sender behaviour": bool(enable_sender_group),
+    }
+
+    allowed = set()
+    for name, columns in FEATURE_GROUPS.items():
+        if active_groups[name]:
+            allowed.update(columns)
+
+    resolved = [f for f in CANONICAL_FEATURE_ORDER if f in allowed]
+
+    report.groups = active_groups
+    report.active_feature_count = len(resolved)
+    return resolved
+
+
+# The canonical PaySim feature list, kept under its original name because
+# test_explain.py and the trained model metadata both refer to it.
+MODEL_FEATURES = resolve_features(
+    schema.CapabilityReport(mapped=list(schema.CANONICAL_FIELDS), absent=[]),
+    enable_sender_group=False,
+)
 
 # Plain-English names, used in Phase 3 to turn SHAP output into sentences a
 # bank customer can actually understand.

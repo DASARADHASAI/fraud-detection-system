@@ -228,6 +228,64 @@ def e_paysim_frame_survives() -> None:
           "shape is unchanged", f"{out.shape}")
 
 
+def f_feature_groups() -> None:
+    print("\n9. Feature groups resolve from what the data supports")
+    import json
+    import features
+
+    counts = {name: len(cols) for name, cols in features.FEATURE_GROUPS.items()}
+    check(counts["A core transaction"] == 9, "group A has 9 features", str(counts))
+    check(counts["B balance"] == 11, "group B has 11 features", str(counts))
+    check(counts["C receiver behaviour"] == 8, "group C has 8 features", str(counts))
+    check(counts["D sender behaviour"] == 7, "group D has 7 features", str(counts))
+
+    # PaySim: everything supplied, but sender history is inert (99.85% of
+    # senders appear once), so group D stays off and the list is the old 28.
+    full = schema.CapabilityReport(mapped=list(schema.CANONICAL_FIELDS), absent=[])
+    resolved = features.resolve_features(full, enable_sender_group=False)
+    check(len(resolved) == 28, "PaySim resolves to the original 28 features",
+          str(len(resolved)))
+    check(resolved == list(features.MODEL_FEATURES),
+          "MODEL_FEATURES is exactly the resolver's PaySim output")
+
+    # THE ORDER MATTERS. build_feature_matrix does df[feature_cols], so a
+    # reordered list silently feeds the model its columns in the wrong order.
+    trained = json.load(open("models/model_metadata.json"))["feature_columns"]
+    check(resolved == trained,
+          "the resolved order is identical to the trained model's column order",
+          f"first difference at {next((i for i,(a,b) in enumerate(zip(resolved,trained)) if a!=b), None)}")
+
+    # No balances: group B drops out entirely.
+    no_bal = schema.CapabilityReport(
+        mapped=[f for f in schema.CANONICAL_FIELDS
+                if f not in schema.OPTIONAL_CANONICAL],
+        absent=list(schema.OPTIONAL_CANONICAL))
+    resolved = features.resolve_features(no_bal, enable_sender_group=False)
+    check(len(resolved) == 17, "without balances, 17 features remain",
+          str(len(resolved)))
+    check(not any(f.startswith(("errorBalance", "absErrorBalance")) for f in resolved),
+          "no balance-derived feature survives")
+    check("amount_to_balance_ratio" not in resolved,
+          "the balance ratio is gone too")
+
+    # No balances but repeat senders: group D compensates.
+    resolved = features.resolve_features(no_bal, enable_sender_group=True)
+    check(len(resolved) == 24, "group D brings it back to 24", str(len(resolved)))
+    check("user_velocity_count" in resolved, "sender velocity is included")
+    check(no_bal.groups["B balance"] is False, "the report records B as off")
+    check(no_bal.active_feature_count == 24, "the report records the count")
+
+    # A partial balance set is NOT good enough -- errorBalanceOrig needs both
+    # sender balances, so half the group would be computed from a zero.
+    partial = schema.CapabilityReport(
+        mapped=[f for f in schema.CANONICAL_FIELDS if f != "newbalanceDest"],
+        absent=["newbalanceDest"])
+    resolved = features.resolve_features(partial, enable_sender_group=False)
+    check(len(resolved) == 17,
+          "one missing balance column switches the whole group off",
+          str(len(resolved)))
+
+
 def main() -> int:
     print("=" * 70)
     print("SCHEMA -- the data boundary")
@@ -243,6 +301,7 @@ def main() -> int:
     d_unparseable_step()
     e_identity_is_paysim()
     e_paysim_frame_survives()
+    f_feature_groups()
 
     print("\n" + "=" * 70)
     if failures:
