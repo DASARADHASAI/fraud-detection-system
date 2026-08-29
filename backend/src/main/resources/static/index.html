@@ -52,6 +52,26 @@
   font-family: 'Space Grotesk'; font-style: normal; font-weight: 700;
   font-display: swap; src: url('/vendor/fonts/space-grotesk-latin-700-normal.woff2') format('woff2');
 }
+/* Instrument Sans -- SIL Open Font License, so it ships with the project the
+   same way Space Grotesk did. Neutral where Space Grotesk is quirky: its
+   flatter terminals and tighter apertures read as instrumentation rather than
+   editorial, which is what this screen is. */
+@font-face {
+  font-family: 'Instrument Sans'; font-style: normal; font-weight: 400;
+  font-display: swap; src: url('/vendor/fonts/instrument-sans-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Instrument Sans'; font-style: normal; font-weight: 500;
+  font-display: swap; src: url('/vendor/fonts/instrument-sans-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Instrument Sans'; font-style: normal; font-weight: 600;
+  font-display: swap; src: url('/vendor/fonts/instrument-sans-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Instrument Sans'; font-style: normal; font-weight: 700;
+  font-display: swap; src: url('/vendor/fonts/instrument-sans-700.woff2') format('woff2');
+}
 @font-face {
   font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 400;
   font-display: swap; src: url('/vendor/fonts/ibm-plex-mono-latin-400-normal.woff2') format('woff2');
@@ -63,11 +83,12 @@
 
 :root {
   --bg:        #0a0a0a;
-  --panel:     #111111;
-  --panel-2:   #161616;
+  --panel:     #171717;
+  --panel-2:   #212121;
   --line:      #262626;
   --line-2:    #3a3a3a;
-  --white:     #ffffff;
+  --white:     #fefefe;   /* off-white, not pure: pure white on near-black
+                            glares under a projector */
   --grey:      #c8c8c8;
   --grey-2:    #8f8f8f;
 
@@ -78,7 +99,7 @@
   --red:       #fd0100;
   --red-dim:   rgba(253, 1, 0, 0.12);
 
-  --display: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+  --display: 'Instrument Sans', -apple-system, BlinkMacSystemFont, sans-serif;
   --mono: 'IBM Plex Mono', 'SF Mono', Menlo, monospace;
 
   /* ONE easing curve, everywhere. Both reference sites do this and it is most
@@ -638,6 +659,30 @@ button.send:hover .arrow { transform: translateX(4px); }
   font-family: var(--mono); font-size: 11.5px; color: var(--grey);
   background: var(--panel-2); padding: 1px 5px; border-radius: 3px;
 }
+
+/* ------------------------------------------------------ window chrome ----
+   Panels read as application windows rather than flat cards: the header is a
+   title bar on its own surface, not a heading with a rule under it.
+
+   Deliberately NO fake traffic-light dots. On a real desktop those close,
+   minimise and zoom a window; here they would do nothing, and a control that
+   looks like a control but isn't is the one kind of interface dishonesty this
+   project should never ship. The chrome is real -- a title bar that titles. */
+.panel > header {
+  background: var(--panel-2);
+  border-radius: 5px 5px 0 0;
+}
+.panel > header .num {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+  color: var(--grey-2);
+}
+
+/* Chrome is furniture, not content. Labels, numbers and band names should not
+   highlight when someone drags across the screen mid-demo -- but the evidence,
+   the explanation and every figure stay selectable, because a panel member may
+   well want to select and read them. */
+.masthead, .panel > header, .label, .band, .big-cap, .ev-n, .score-cap,
+.trace-step, .gate span { user-select: none; -webkit-user-select: none; }
 </style>
 </head>
 <body>
