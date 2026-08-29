@@ -306,7 +306,20 @@ button.send:hover .arrow { transform: translateX(4px); }
 }
 
 /* ------------------------------------------------------------------- feed */
-.feed-list { max-height: 640px; overflow-y: auto; }
+/* The feed is a stream, not a list with ends. A hard clip at 640px says "the
+   data stops here"; fading the two edges says "this continues". 18px rather
+   than a percentage -- a percentage fade scales with the container and starts
+   swallowing whole rows on a short window, and these rows have to stay
+   readable from the back of a room.
+   Technique noted from ssscript.app, which fades its scroll panes the same
+   way; the values here are ours. */
+.feed-list {
+  max-height: 640px; overflow-y: auto;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0,
+      #000 18px, #000 calc(100% - 18px), transparent 100%);
+          mask-image: linear-gradient(180deg, transparent 0,
+      #000 18px, #000 calc(100% - 18px), transparent 100%);
+}
 .feed-list::-webkit-scrollbar { width: 8px; }
 .feed-list::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 4px; }
 
@@ -747,12 +760,12 @@ button.send:hover .arrow { transform: translateX(4px); }
           <p class="side-sub">Cannot see the payer&rsquo;s balance. Not &ldquo;usually
              does not&rdquo; &mdash; cannot: the payer banks elsewhere, and no gateway
              discloses it.</p>
-          <div class="big" data-to="1">0</div>
+          <div class="big" data-to="1">1</div>
           <div class="big-cap">of 150 frauds blocked</div>
-          <div class="meter"><i data-w="0.67"></i></div>
+          <div class="meter"><i data-w="0.67" style="width:0.67%"></i></div>
           <ul class="side-facts">
-            <li><b data-to="57">0</b> frauds silently approved</li>
-            <li><b data-to="44.7" data-dp="1" data-suffix="%">0</b> of decisions unchanged</li>
+            <li><b data-to="57">57</b> frauds silently approved</li>
+            <li><b data-to="44.7" data-dp="1" data-suffix="%">44.7%</b> of decisions unchanged</li>
           </ul>
         </div>
 
@@ -761,12 +774,12 @@ button.send:hover .arrow { transform: translateX(4px); }
           <p class="side-sub">Sees the payer&rsquo;s balance, because it holds the
              account. It is blind to the other side instead &mdash; and that turns
              out to cost almost nothing.</p>
-          <div class="big" data-to="143">0</div>
+          <div class="big" data-to="143">143</div>
           <div class="big-cap">of 150 frauds blocked</div>
-          <div class="meter"><i data-w="95.3"></i></div>
+          <div class="meter"><i data-w="95.3" style="width:95.3%"></i></div>
           <ul class="side-facts">
             <li><b data-to="0">0</b> frauds silently approved</li>
-            <li><b data-to="96" data-dp="1" data-suffix="%">0</b> of decisions unchanged</li>
+            <li><b data-to="96" data-dp="1" data-suffix="%">96.0%</b> of decisions unchanged</li>
           </ul>
         </div>
       </div>
@@ -884,6 +897,8 @@ const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 function countTo(node, target, ms) {
   if (REDUCED) { node.textContent = target.toFixed(3); return; }
   const t0 = performance.now();
+  /* Same guard as countNode: a score frozen at 0.000 misreports the decision. */
+  setTimeout(() => { node.textContent = target.toFixed(3); }, ms + 120);
   (function frame(now) {
     const k = Math.min(1, (now - t0) / ms);
     const eased = 1 - Math.pow(1 - k, 3);
@@ -1256,6 +1271,10 @@ function countNode(node) {
   const suffix = node.dataset.suffix || '';
   if (REDUCED) { node.textContent = to.toFixed(dp) + suffix; return; }
   const t0 = performance.now(), MS = 900;
+  /* requestAnimationFrame is suspended whenever the tab is not painting, and a
+     suspended counter leaves "0 frauds blocked" on screen. So the true value is
+     also written on a plain timer: whichever lands first, the figure is right. */
+  setTimeout(() => { node.textContent = to.toFixed(dp) + suffix; }, MS + 120);
   (function frame(now) {
     const k = Math.min(1, (now - t0) / MS);
     node.textContent = (to * (1 - Math.pow(1 - k, 3))).toFixed(dp) + suffix;
@@ -1265,23 +1284,37 @@ function countNode(node) {
 
 (function watchSight() {
   const sec = el('sight');
-  if (!sec || !('IntersectionObserver' in window)) return;
-  const io = new IntersectionObserver(entries => {
-    entries.forEach(e => {
-      if (!e.isIntersecting) return;
-      io.disconnect();
-      sec.querySelectorAll('.big, .side-facts b').forEach(countNode);
-      sec.querySelectorAll('.meter i').forEach(m => { m.style.width = m.dataset.w + '%'; });
-    });
-  }, {
-    /* threshold 0 + a bottom margin, NOT a ratio. A ratio can never be met when
-       the section is taller than the window -- which it is on a narrow or short
-       viewport, where the two columns stack. That version showed zeros forever.
-       This fires as soon as the top of the section clears the lower fifth. */
-    threshold: 0,
-    rootMargin: '0px 0px -20% 0px'
-  });
-  io.observe(sec);
+  if (!sec || REDUCED) return;   /* leave the real figures exactly as served */
+
+  const nums   = [...sec.querySelectorAll('.big, .side-facts b')];
+  const meters = [...sec.querySelectorAll('.meter i')];
+
+  /* Only NOW zero them -- past this line we know the code that puts them back
+     is present and running. IntersectionObserver is deliberately not used: it
+     silently delivered nothing in testing, and a section that reports "0
+     frauds blocked" because an observer misfired is a lie about the result. */
+  nums.forEach(n => { n.textContent = '0'; });
+  meters.forEach(m => { m.style.width = '0%'; });
+
+  let done = false;
+  const reveal = () => {
+    if (done) return;
+    done = true;
+    window.removeEventListener('scroll', onScroll);
+    nums.forEach(countNode);
+    meters.forEach(m => { m.style.width = m.dataset.w + '%'; });
+  };
+  const onScroll = () => {
+    const r = sec.getBoundingClientRect();
+    if (r.top < window.innerHeight * 0.8 && r.bottom > 0) reveal();
+  };
+
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+  /* Last resort. If scroll never fires -- a short page, a projector at an odd
+     resolution, anything -- the numbers still arrive rather than sitting at
+     zero in front of a panel. */
+  setTimeout(reveal, 6000);
 })();
 
 renderScenarios(); initChart(); refreshHealth(); refreshFeed(); refreshStats();
