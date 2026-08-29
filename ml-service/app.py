@@ -52,7 +52,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 from explain import load_explainer
-from features import load_config
+from features import load_config, FEATURE_GROUPS
 from genai_agent import FraudGenAIAgent
 import rules
 from live_features import (
@@ -268,6 +268,20 @@ def health():
             "knowledge_base_cases": len(AGENT.knowledge_base.cases),
         },
         "accounts_in_memory": HISTORY.size(),
+        # Phase 14 -- what the training data could actually support.
+        #
+        # Derived from the columns the model was ACTUALLY trained on, not from a
+        # default. The serving process never calls load_raw_data, so there is no
+        # capability report in memory here; defaulting these to True would
+        # advertise a capability the model does not have, which is the exact
+        # silent failure this report exists to prevent.
+        "data_capability": {
+            "groups": {
+                name: all(c in FEATURE_COLUMNS for c in cols)
+                for name, cols in FEATURE_GROUPS.items()
+            },
+            "active_feature_count": len(FEATURE_COLUMNS),
+        },
     })
 
 

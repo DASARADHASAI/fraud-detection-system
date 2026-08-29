@@ -319,6 +319,37 @@ def g_group_d_phrases() -> None:
     check(len(full) == 35, "the full set is 35 features", str(len(full)))
 
 
+def h_health_reports() -> None:
+    print("\n11. /health reports what the data supports")
+    import requests
+    try:
+        r = requests.get("http://localhost:5001/health", timeout=3)
+    except Exception:
+        print("  SKIPPED: no server on port 5001")
+        return
+
+    body = r.json()
+    check("data_capability" in body, "/health has a data_capability block",
+          str(list(body.keys())))
+    cap = body.get("data_capability", {})
+    check("groups" in cap, "it lists the feature groups")
+    check("active_feature_count" in cap, "it states the active feature count")
+    check(cap.get("active_feature_count") == body.get("feature_count"),
+          "the count agrees with feature_count",
+          f"{cap.get('active_feature_count')} vs {body.get('feature_count')}")
+
+    # The honesty guard: groups must be derived from the columns the model was
+    # ACTUALLY trained on. The serving process never calls load_raw_data, so a
+    # default of all-True would advertise a capability the model may not have.
+    groups = cap.get("groups", {})
+    check(groups.get("D sender behaviour") is False,
+          "group D reads FALSE, because this model was trained without it",
+          str(groups))
+    check(groups.get("B balance") is True,
+          "group B reads TRUE, because PaySim supplied the balances",
+          str(groups))
+
+
 def main() -> int:
     print("=" * 70)
     print("SCHEMA -- the data boundary")
@@ -336,6 +367,7 @@ def main() -> int:
     e_paysim_frame_survives()
     f_feature_groups()
     g_group_d_phrases()
+    h_health_reports()
 
     print("\n" + "=" * 70)
     if failures:
