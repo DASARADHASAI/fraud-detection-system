@@ -564,6 +564,60 @@ button.send:hover .arrow { transform: translateX(4px); }
   .score-num { font-size: 30px; }
   .track-row { gap: 14px; }
 }
+
+/* ---------------------------------------------- 06 what each side can see -
+   SignalIQ's before/after: a filling bar and a number that climbs. Their
+   payload is a made-up statement; ours is a measurement -- 300 payments scored
+   twice against the same engine, history reset between runs. It reveals on
+   scroll because unlike the verdict it is an argument, not a live event. */
+.sight { margin-top: 20px; }
+.sight-body { padding: 22px 24px 26px; }
+.sight-lede { margin: 0 0 26px; font-size: 21px; line-height: 1.35; letter-spacing: -0.02em; }
+.sight-lede span { color: var(--grey-2); font-weight: 400; }
+.sight-lede b { color: var(--white); font-weight: 700; display: block; }
+
+.sight-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+@media (max-width: 780px) { .sight-cols { grid-template-columns: 1fr; } }
+
+.side { border: 1px solid var(--line); border-radius: 5px; padding: 18px 18px 20px; }
+.side-sub { margin: 12px 0 0; font-size: 13px; line-height: 1.55; color: var(--grey-2); }
+.big {
+  font-family: var(--mono); font-size: 58px; font-weight: 600; line-height: 1;
+  letter-spacing: -0.045em; margin-top: 20px; font-variant-numeric: tabular-nums;
+}
+.is-blind   .big { color: var(--red); }
+.is-sighted .big { color: var(--green); }
+.big-cap {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--grey-2); margin-top: 9px;
+}
+.meter { height: 3px; background: var(--line); border-radius: 2px; margin-top: 15px; }
+.meter i {
+  display: block; height: 100%; width: 0; border-radius: 2px;
+  transition: width 900ms cubic-bezier(0.22, 0.9, 0.26, 1);
+}
+.is-blind   .meter i { background: var(--red); }
+.is-sighted .meter i { background: var(--green); }
+
+.side-facts { list-style: none; margin: 18px 0 0; padding: 0; }
+.side-facts li {
+  display: flex; align-items: baseline; gap: 9px;
+  padding: 8px 0; border-top: 1px solid var(--line);
+  font-size: 13px; color: var(--grey-2);
+}
+.side-facts b {
+  font-family: var(--mono); font-size: 16px; font-weight: 600; color: var(--white);
+  font-variant-numeric: tabular-nums; min-width: 46px;
+}
+.sight-foot {
+  margin: 26px 0 0; padding-top: 16px; border-top: 1px solid var(--line);
+  font-size: 13px; line-height: 1.65; color: var(--grey-2); max-width: 92ch;
+}
+.sight-foot b { color: var(--white); }
+.sight-foot code {
+  font-family: var(--mono); font-size: 11.5px; color: var(--grey);
+  background: var(--panel-2); padding: 1px 5px; border-radius: 3px;
+}
 </style>
 </head>
 <body>
@@ -677,6 +731,57 @@ button.send:hover .arrow { transform: translateX(4px); }
       <p class="note" id="threshold-note"></p>
     </section>
   </div>
+
+  <section class="panel sight" id="sight">
+    <header><span class="num">06</span><h2>What each side can see</h2></header>
+
+    <div class="sight-body">
+      <p class="sight-lede">
+        <span>The same 300 payments, scored twice by the same engine.</span>
+        <b>Only the evidence changed.</b>
+      </p>
+
+      <div class="sight-cols">
+        <div class="side is-blind">
+          <div class="side-cap cropped"><b>At a merchant</b></div>
+          <p class="side-sub">Cannot see the payer&rsquo;s balance. Not &ldquo;usually
+             does not&rdquo; &mdash; cannot: the payer banks elsewhere, and no gateway
+             discloses it.</p>
+          <div class="big" data-to="1">0</div>
+          <div class="big-cap">of 150 frauds blocked</div>
+          <div class="meter"><i data-w="0.67"></i></div>
+          <ul class="side-facts">
+            <li><b data-to="57">0</b> frauds silently approved</li>
+            <li><b data-to="44.7" data-dp="1" data-suffix="%">0</b> of decisions unchanged</li>
+          </ul>
+        </div>
+
+        <div class="side is-sighted">
+          <div class="side-cap cropped"><b>At the bank</b></div>
+          <p class="side-sub">Sees the payer&rsquo;s balance, because it holds the
+             account. It is blind to the other side instead &mdash; and that turns
+             out to cost almost nothing.</p>
+          <div class="big" data-to="143">0</div>
+          <div class="big-cap">of 150 frauds blocked</div>
+          <div class="meter"><i data-w="95.3"></i></div>
+          <ul class="side-facts">
+            <li><b data-to="0">0</b> frauds silently approved</li>
+            <li><b data-to="96" data-dp="1" data-suffix="%">0</b> of decisions unchanged</li>
+          </ul>
+        </div>
+      </div>
+
+      <p class="sight-foot">
+        <b>68.3%</b> of the model&rsquo;s importance sits in the payer&rsquo;s balance
+        &mdash; <code>errorBalanceOrig</code> 0.2105, <code>absErrorBalanceOrig</code>
+        0.1771, <code>amount_to_balance_ratio</code> 0.1543,
+        <code>orig_account_emptied</code> 0.1411. A merchant sees none of it.
+        With both sides visible the engine blocks 149 of 150. This is the
+        quantified argument for putting it at the remitter bank &mdash; not a
+        preference, a 143-to-1 difference.
+      </p>
+    </div>
+  </section>
 </main>
 
 <div class="scrim" id="otp-scrim">
@@ -1141,6 +1246,44 @@ async function refreshHealth() {
 el('city').innerHTML = CITIES.map(c => `<option>${c.name}</option>`).join('');
 el('city').addEventListener('change', previewTravel);
 el('nameOrig').addEventListener('input', previewTravel);
+
+/* Reveal 06 when it is actually looked at. Counting a number that nobody is
+   watching is a wasted argument -- and re-running it on every scroll would be
+   a fidget, so it fires once. */
+function countNode(node) {
+  const to = parseFloat(node.dataset.to || '0');
+  const dp = parseInt(node.dataset.dp || '0', 10);
+  const suffix = node.dataset.suffix || '';
+  if (REDUCED) { node.textContent = to.toFixed(dp) + suffix; return; }
+  const t0 = performance.now(), MS = 900;
+  (function frame(now) {
+    const k = Math.min(1, (now - t0) / MS);
+    node.textContent = (to * (1 - Math.pow(1 - k, 3))).toFixed(dp) + suffix;
+    if (k < 1) requestAnimationFrame(frame);
+  })(t0);
+}
+
+(function watchSight() {
+  const sec = el('sight');
+  if (!sec || !('IntersectionObserver' in window)) return;
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (!e.isIntersecting) return;
+      io.disconnect();
+      sec.querySelectorAll('.big, .side-facts b').forEach(countNode);
+      sec.querySelectorAll('.meter i').forEach(m => { m.style.width = m.dataset.w + '%'; });
+    });
+  }, {
+    /* threshold 0 + a bottom margin, NOT a ratio. A ratio can never be met when
+       the section is taller than the window -- which it is on a narrow or short
+       viewport, where the two columns stack. That version showed zeros forever.
+       This fires as soon as the top of the section clears the lower fifth. */
+    threshold: 0,
+    rootMargin: '0px 0px -20% 0px'
+  });
+  io.observe(sec);
+})();
+
 renderScenarios(); initChart(); refreshHealth(); refreshFeed(); refreshStats();
 paintWallpaper();
 window.addEventListener('resize', paintWallpaper);
