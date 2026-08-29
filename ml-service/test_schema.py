@@ -120,6 +120,28 @@ def b_normalise_requires() -> None:
         check(False, "a missing required column must raise SchemaError")
 
 
+def c_absent_balances() -> None:
+    print("\n6. Unsupplied balances use the 'not recorded' encoding")
+    mapping = schema.load_mapping(SPARKOV_MAP)
+    out, report = schema.normalize(_sparkov_like(), mapping)
+
+    for field in schema.OPTIONAL_CANONICAL:
+        check(field in out.columns, f"'{field}' was created")
+        check((out[field] == 0.0).all(),
+              f"'{field}' is zero -- PaySim's 'not recorded' convention",
+              str(out[field].tolist()))
+
+    check(sorted(report.absent) == sorted(schema.OPTIONAL_CANONICAL),
+          "the report lists the four absent balance fields", str(report.absent))
+    check("amount" in report.mapped, "the report lists what WAS supplied")
+
+    text = report.render()
+    check("not recorded" in text.lower(),
+          "the rendered report states the encoding used")
+    check("oldbalanceOrg" in text,
+          "the rendered report names each absent field")
+
+
 def main() -> int:
     print("=" * 70)
     print("SCHEMA -- the data boundary")
@@ -129,6 +151,7 @@ def main() -> int:
     a_rejections()
     b_normalise_renames()
     b_normalise_requires()
+    c_absent_balances()
 
     print("\n" + "=" * 70)
     if failures:

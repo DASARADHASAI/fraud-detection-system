@@ -106,13 +106,50 @@ def load_mapping(cfg: dict) -> dict[str, str]:
 
 
 class CapabilityReport:
-    """What the supplied data can and cannot support. Grows across Tasks 3 and 6."""
+    """
+    What the supplied data can and cannot support.
+
+    >>> WHY THIS EXISTS <<<
+    Missing balance columns do not crash anything. Eleven features simply become
+    constant zero, the forest never splits on them, and you have silently trained
+    a 17-feature model believing it is a 28-feature one. On PaySim those eleven
+    carried 68.3% of model importance, and losing them took fraud blocking from
+    149/150 to 1/150. A degradation that large must not be silent.
+    """
 
     def __init__(self, mapped: list[str], absent: list[str]) -> None:
         self.mapped = mapped
         self.absent = absent
-        self.groups: dict[str, bool] = {}          # filled by the resolver, Task 6
-        self.active_feature_count: int = 0         # filled by the resolver, Task 6
+        self.groups: dict[str, bool] = {}          # filled by the resolver
+        self.active_feature_count: int = 0         # filled by the resolver
+
+    def render(self) -> str:
+        lines = [
+            "DATA CAPABILITY REPORT",
+            f"  Mapped        {', '.join(self.mapped) or '(none)'}",
+            f"  Not supplied  {', '.join(self.absent) or '(none)'}",
+        ]
+        if self.groups:
+            lines.append("")
+            lines.append("  Feature groups")
+            for name, on in self.groups.items():
+                lines.append(f"    {name:<24} {'ON ' if on else 'OFF'}")
+            lines.append(f"  Active feature count  {self.active_feature_count}")
+
+        balance_absent = [f for f in self.absent if f in OPTIONAL_CANONICAL]
+        if balance_absent:
+            lines += [
+                "",
+                "  COST OF THE MISSING BALANCE COLUMNS",
+                f"    {', '.join(balance_absent)}",
+                "    On PaySim these carried 68.3% of model importance.",
+                "    Balance-error signals will be inert; account-drain",
+                "    detection is unavailable.",
+                "    Encoded as 'not recorded' (zero), NOT as reconciling",
+                "    balances -- a reconciling balance is the fraud signature",
+                "    in 99.5% of cases.",
+            ]
+        return "\n".join(lines)
 
 
 def normalize(df: pd.DataFrame, mapping: dict[str, str]):
@@ -151,6 +188,12 @@ def normalize(df: pd.DataFrame, mapping: dict[str, str]):
             # errors="coerce" turns unparseable junk into NaN rather than
             # throwing. NaN is then visible and testable; a silent string is not.
             out[field] = pd.to_numeric(out[field], errors="coerce").astype(float)
+
+    # An unsupplied balance becomes PaySim's own "not recorded" encoding: zero.
+    # NEVER a reconciling balance -- see the CapabilityReport docstring.
+    for field in OPTIONAL_CANONICAL:
+        if field not in out.columns:
+            out[field] = 0.0
 
     mapped = [f for f in CANONICAL_FIELDS if f not in absent]
     return out, CapabilityReport(mapped=mapped, absent=absent)
