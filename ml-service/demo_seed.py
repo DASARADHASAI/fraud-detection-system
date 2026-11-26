@@ -87,7 +87,7 @@ def main() -> int:
             print(f"  {orig} -> {dest} failed: {exc}", file=sys.stderr)
             return 1
 
-        decision = response.json().get("finalDecision", "?")
+        decision = response.json().get("decision") or response.json().get("finalDecision", "?")
         if decision == "APPROVE":
             approved += 1
         else:
